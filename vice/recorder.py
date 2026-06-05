@@ -500,6 +500,28 @@ def _resolution_scale_filter(resolution: Optional[str]) -> Optional[str]:
     return f"scale={width}:{height}"
 
 
+def _wf_geometry_flag(resolution: Optional[str]) -> Optional[list[str]]:
+    if not resolution:
+        return None
+    if "x" not in resolution:
+        return None
+    width, height = resolution.lower().split("x", 1)
+    if not width.isdigit() or not height.isdigit():
+        return None
+    return ["-g", f"{width}x{height}"]
+
+
+def _gsr_resolution_flag(resolution: Optional[str]) -> Optional[list[str]]:
+    if not resolution:
+        return None
+    if "x" not in resolution:
+        return None
+    width, height = resolution.lower().split("x", 1)
+    if not width.isdigit() or not height.isdigit():
+        return None
+    return ["-s", f"{width}x{height}"]
+
+
 def _merge_ffmpeg_filters(flags: list[str], extra_filter: Optional[str]) -> list[str]:
     if not extra_filter:
         return flags
@@ -946,6 +968,10 @@ class Recorder(ABC):
                 if _wf_supports_flag("--force-yuv"):
                     cmd.append("--force-yuv")
                 cmd += ["-f", str(out_path)]
+                if rc.resolution:
+                    wf_geometry = _wf_geometry_flag(rc.resolution)
+                    if wf_geometry:
+                        cmd += wf_geometry
                 if rc.capture_audio:
                     cmd += [f"--audio={_desktop_audio_source(rc.audio_sink)}"]
                 if encoder in ("h264_nvenc", "hevc_nvenc"):
@@ -973,6 +999,10 @@ class Recorder(ABC):
 
         if not _gsr_has_any_flag(extra, "-w"):
             cmd += ["-w", _gsr_capture_target(rc)]
+        if not _gsr_has_any_flag(extra, "-s"):
+            gsr_resolution = _gsr_resolution_flag(rc.resolution)
+            if gsr_resolution:
+                cmd += gsr_resolution
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
         if not _gsr_has_any_flag(extra, "-c"):
@@ -1207,6 +1237,11 @@ class GSRRecorder(Recorder):
         if not _gsr_has_any_flag(extra, "-w"):
             cmd += ["-w", _gsr_capture_target(rc)]
 
+        if not _gsr_has_any_flag(extra, "-s"):
+            gsr_resolution = _gsr_resolution_flag(rc.resolution)
+            if gsr_resolution:
+                cmd += gsr_resolution
+
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
 
@@ -1376,8 +1411,9 @@ class SegmentRecorder(Recorder):
             cmd.append("--force-yuv")
         cmd += ["-f", str(out)]
         if rc.resolution:
-            # wf-recorder geometry flag
-            pass  # resolution is auto by default; geometry can be set with -g
+            wf_geometry = _wf_geometry_flag(rc.resolution)
+            if wf_geometry:
+                cmd += wf_geometry
         target = _wf_capture_target(rc)
         if target:
             cmd += ["-o", target]
