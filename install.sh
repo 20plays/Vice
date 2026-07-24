@@ -431,14 +431,14 @@ _gsr_build_from_source() {
             _dnf_install_best_effort git meson ninja-build pkgconfig gcc-c++ \
                 pipewire-devel libX11-devel libXcomposite-devel libXrandr-devel \
                 libXdamage-devel libXfixes-devel pulseaudio-libs-devel libdrm-devel \
-                libva-devel vulkan-loader-devel libcap-devel \
+                libva-devel vulkan-loader-devel libcap-devel dbus-devel \
                 "$ffmpeg_devel" wayland-devel mesa-libGL-devel mesa-libEGL-devel
             ;;
         zypper)
             sudo zypper install -y git meson ninja pkg-config pipewire-devel \
                 libX11-devel libXcomposite-devel libXrandr-devel libXdamage-devel \
                 libXfixes-devel libpulse-devel libdrm-devel ffmpeg-7-libavcodec-devel \
-                wayland-devel Mesa-libGL-devel Mesa-libEGL-devel || return 1
+                wayland-devel Mesa-libGL-devel Mesa-libEGL-devel dbus-1-devel || return 1
             ;;
         pacman)
             sudo pacman -S --needed --noconfirm git meson ninja pkgconf || return 1
