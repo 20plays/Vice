@@ -268,13 +268,15 @@ function startRename(slug, el) {
   input.className = 'clip-rename-input';
   input.value = current;
   nameEl.replaceWith(input);
+  card.classList.add('renaming');
   input.focus(); input.select();
   let submitted = false;
+  const revert = () => { card.classList.remove('renaming'); input.replaceWith(nameEl); };
   const submit = async () => {
     if (submitted) return;
     submitted = true;
     const v = input.value.trim();
-    if (!v || v === current) { input.replaceWith(nameEl); return; }
+    if (!v || v === current) { revert(); return; }
     if (v.includes(' ')) { toast('Clip name cannot contain spaces', 'err'); submitted = false; input.focus(); input.select(); return; }
     try {
       const r = await fetch(`/api/clips/${encodeURIComponent(slug)}/rename`, {
@@ -283,10 +285,11 @@ function startRename(slug, el) {
         body: JSON.stringify({ name: v }),
       });
       const data = await r.json();
-      if (!data.ok) { toast(data.error || 'Rename failed', 'err'); input.replaceWith(nameEl); }
-    } catch (_) { toast('Rename failed', 'err'); input.replaceWith(nameEl); }
+      if (!data.ok) { toast(data.error || 'Rename failed', 'err'); revert(); }
+      else { card.classList.remove('renaming'); }
+    } catch (_) { toast('Rename failed', 'err'); revert(); }
   };
-  const cancel = () => { if (!submitted) { submitted = true; input.replaceWith(nameEl); } };
+  const cancel = () => { if (!submitted) { submitted = true; revert(); } };
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter')  { e.preventDefault(); submit(); }
     if (e.key === 'Escape') { cancel(); }
