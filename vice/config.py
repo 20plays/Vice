@@ -221,6 +221,13 @@ class UpdatesConfig:
 
 
 @dataclass
+class NotificationsConfig:
+    # Loudness of the clip and session tones, 0.0 to 1.0. 0 plays nothing at
+    # all rather than playing silence, so no audio player is spawned.
+    sound_volume: float = 1.0
+
+
+@dataclass
 class Config:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
@@ -228,6 +235,7 @@ class Config:
     sharing: SharingConfig = field(default_factory=SharingConfig)
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     updates: UpdatesConfig = field(default_factory=UpdatesConfig)
+    notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
 
 
 def _merge(defaults: dict, overrides: dict) -> dict:
@@ -438,6 +446,9 @@ def load() -> Config:
         sharing=SharingConfig(**_known_keys(SharingConfig, merged.get("sharing", {}))),
         discord=DiscordConfig(**_known_keys(DiscordConfig, discord_raw), custom_games=custom_games),
         updates=UpdatesConfig(**_known_keys(UpdatesConfig, merged.get("updates", {}))),
+        notifications=NotificationsConfig(
+            **_known_keys(NotificationsConfig, merged.get("notifications", {}))
+        ),
     )
     ensure_buffer_covers_clip_presets(cfg)
     clamp_recording_limits(cfg)

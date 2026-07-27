@@ -36,8 +36,11 @@ function pick(id, val) {
 
 function syncFormFromCfg() {
   const r = cfg.recording || {}, h = cfg.hotkeys || {}, o = cfg.output || {}, s = cfg.sharing || {}, d = cfg.discord || {};
-  const u = cfg.updates || {};
+  const u = cfg.updates || {}, n = cfg.notifications || {};
   document.getElementById('s-update-check').checked = u.check_on_start !== false;
+  const volNotify = Math.round((n.sound_volume ?? 1) * 100);
+  document.getElementById('s-vol-notify').value = volNotify;
+  setText('s-vol-notify-v', volNotify ? volNotify + '%' : 'Off');
 
   const buf = r.buffer_duration ?? 120;
   document.getElementById('s-buf').value = buf;
@@ -599,6 +602,9 @@ async function saveSettings() {
     },
     updates: {
       check_on_start: document.getElementById('s-update-check').checked,
+    },
+    notifications: {
+      sound_volume: (+document.getElementById('s-vol-notify').value) / 100,
     },
     discord: {
       enabled: document.getElementById('s-discord-enabled').checked,

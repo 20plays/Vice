@@ -324,6 +324,18 @@ class UIStaticCopyTests(unittest.TestCase):
         ):
             self.assertIn(ref, self.index)
 
+    def test_notification_volume_is_adjustable(self) -> None:
+        # Issue #127: the clip ping had no volume control and no way off.
+        self.assertIn('id="s-vol-notify"', self.index)
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        self.assertIn("sound_volume", settings_js)
+        self.assertIn("notifications", settings_js)
+        # 0 must read as Off, not as "0%", or it looks broken rather than muted.
+        self.assertIn("'Off'", settings_js)
+        self.assertIn("s-vol-notify-v", self.index)
+        row = self.index.split('id="s-vol-notify"')[0].split("Notification volume")[1]
+        self.assertNotIn("—", row)
+
     def test_effects_mode_is_measured_not_guessed(self) -> None:
         perf = (REPO_ROOT / "vice" / "ui" / "scripts" / "perf.js").read_text()
         # The engine can drop to software compositing silently, so the verdict

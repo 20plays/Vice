@@ -565,6 +565,15 @@
                 </div>
               </div>
 
+              <div class="settings-row">
+                <div class="s-label"><strong>Notification volume</strong><span>The ping when a clip is saved, and the session start, stop and highlight tones. Slide to 0 for silence.</span></div>
+                <div class="range-group">
+                  <input type="range" id="s-vol-notify" min="0" max="100" step="5" value="100"
+                         oninput="setText('s-vol-notify-v', this.value > 0 ? this.value + '%' : 'Off')">
+                  <span class="range-val mono" id="s-vol-notify-v">100%</span>
+                </div>
+              </div>
+
               <div class="settings-row settings-row-stack">
                 <div class="s-label"><strong>Separate audio tracks</strong><span>Each source becomes its own track for editing. Players, Discord, and shares play track 1. With mic capture on, your microphone gets its own track. Empty = one mixed track.</span></div>
                 <div class="track-builder">

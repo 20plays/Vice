@@ -1437,7 +1437,7 @@ class ShareServer:
     async def _api_set_config(self, req: web.Request) -> web.Response:
         from .config import (
             Config, RecordingConfig, HotkeyConfig, OutputConfig, SharingConfig,
-            DiscordConfig, DiscordCustomGame, UpdatesConfig,
+            DiscordConfig, DiscordCustomGame, UpdatesConfig, NotificationsConfig,
             clamp_recording_limits, ensure_buffer_covers_clip_presets,
             normalize_clip_presets, normalize_combo,
             validate_hotkeys,
@@ -1505,6 +1505,10 @@ class ShareServer:
             updates=UpdatesConfig(**{
                 k: v for k, v in merged.get("updates", {}).items()
                 if k in UpdatesConfig.__dataclass_fields__
+            }),
+            notifications=NotificationsConfig(**{
+                k: v for k, v in merged.get("notifications", {}).items()
+                if k in NotificationsConfig.__dataclass_fields__
             }),
         )
         try:

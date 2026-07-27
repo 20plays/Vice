@@ -207,9 +207,14 @@ client_id_override = ""     # leave blank to use Vice's default Discord app
 
 [updates]
 check_on_start = true   # ask GitHub once a day whether a newer release exists
+
+[notifications]
+sound_volume = 1.0   # clip and session tones, 0.0 to 1.0. 0 plays nothing
 ```
 
 Notes:
+
+- `notifications.sound_volume` controls the ping when a clip is saved and the session start, stop and highlight tones. Set it to 0, or slide it to Off in Settings → Audio, and Vice plays nothing at all rather than playing silence.
 
 - `updates.check_on_start` asks the GitHub releases API at most once a day whether a newer Vice is out, and shows a notice with a few lines from the release notes when there is. Nothing about you or your clips is sent, the notice appears once per release and leaves only a small chip in the top bar after you dismiss it, and a failed check is silent. Turn it off in Settings → Advanced, or with this key.
 

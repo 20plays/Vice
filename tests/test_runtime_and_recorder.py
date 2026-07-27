@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from vice import app as app_mod
+from vice import audio as audio_mod
 from vice import config as config_mod
 from vice import main as main_mod
 from vice.main import _RECORDER_DEATH_BACKOFF_AFTER
@@ -2537,3 +2538,48 @@ class UpdateNoticeTests(unittest.IsolatedAsyncioTestCase):
         fetch.assert_not_called()
         self.assertEqual(found["version"], self._bump(__version__))
 
+
+class NotificationVolumeTests(unittest.IsolatedAsyncioTestCase):
+    """Issue #127: the clip ping had no volume control and no way off."""
+
+    def _peak(self, wav: bytes) -> int:
+        import io
+        import struct
+        import wave
+        with wave.open(io.BytesIO(wav), "rb") as w:
+            frames = w.readframes(w.getnframes())
+        samples = struct.unpack(f"<{len(frames) // 2}h", frames)
+        return max(abs(s) for s in samples)
+
+    def test_volume_scales_the_tone(self) -> None:
+        loud = audio_mod._wav_for("clip", 1.0)
+        quiet = audio_mod._wav_for("clip", 0.25)
+        self.assertLess(self._peak(quiet), self._peak(loud))
+        # Same sound, just quieter: identical length.
+        self.assertEqual(len(loud), len(quiet))
+
+    def test_out_of_range_volumes_are_clamped(self) -> None:
+        self.assertEqual(audio_mod._clamp_volume(5.0), 1.0)
+        self.assertEqual(audio_mod._clamp_volume(-2.0), 0.0)
+        # A hand-edited config should never crash the daemon.
+        self.assertEqual(audio_mod._clamp_volume("loud"), 1.0)
+
+    def test_zero_volume_plays_nothing(self) -> None:
+        with mock.patch.object(audio_mod, "_play") as play:
+            audio_mod.play_clip(0.0)
+            audio_mod.play_session_start(0.0)
+            audio_mod.play_session_end(0.0)
+            audio_mod.play_highlight(0.0)
+        # No temp file, no player process, no device wake-up.
+        play.assert_not_called()
+
+    async def test_nonzero_volume_still_plays(self) -> None:
+        with mock.patch.object(audio_mod, "_play", new=mock.AsyncMock()) as play:
+            audio_mod.play_clip(0.4)
+            await asyncio.sleep(0)
+        play.assert_awaited_once_with("clip", 0.4)
+
+    def test_daemon_passes_the_configured_volume(self) -> None:
+        source = (Path(__file__).resolve().parents[1] / "vice" / "main.py").read_text()
+        for fn in ("play_clip", "play_session_start", "play_session_end", "play_highlight"):
+            self.assertIn(f"audio.{fn}(self.cfg.notifications.sound_volume)", source)
