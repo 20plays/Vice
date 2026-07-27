@@ -104,7 +104,9 @@ a:hover { color: #a8d6ff; }
   top: 30%; left: 36%; animation: vgDrift3 36s ease-in-out infinite; }
 @keyframes vgDrift1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(90px,50px) scale(1.15); } }
 @keyframes vgDrift2 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-70px,-40px) scale(.9); } }
-@keyframes vgDrift3 { 0%,100% { transform: translate(0,0) rotate(0deg); } 50% { transform: translate(40px,-60px) rotate(8deg); } }
+/* No rotation: .g3 is a circular gradient in a square box, so turning it is
+   invisible and only costs the compositor a transform it cannot skip. */
+@keyframes vgDrift3 { 0%,100% { transform: translate(0,0); } 50% { transform: translate(40px,-60px); } }
 @keyframes vgPulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
 
 /* ── App shell: fixed sidebar + scrolling content column ─────────── */
@@ -121,14 +123,19 @@ a:hover { color: #a8d6ff; }
   #ambient .glow { animation: none; }
 }
 
-/* Software-compositing mode (vice-app relaunched with sw=1): per-frame
-   backdrop blur is what makes software rendering feel laggy, so it is
-   dropped. The sidebar and cards only ever sit over the ambient field,
-   so they stay translucent and the gradient shows through them; surfaces
-   that overlay real content (modals, player bar, popovers) go solid. */
+/* Reduced effects (see perf.js): per-frame backdrop blur is what makes
+   software rendering feel laggy, so it is dropped. The sidebar and cards only
+   ever sit over the ambient field, so they stay translucent and the gradient
+   shows through them; surfaces that overlay real content (modals, player bar,
+   popovers) go solid. Every endless animation stops too: while the glows
+   drift, the whole viewport repaints each frame and every glass surface above
+   them has to blur again, which is most of the cost this mode exists to
+   avoid. */
 .perf-low * { backdrop-filter: none !important; }
-.perf-low #ambient .glow { filter: none; }
-.perf-low .clip-dot, .perf-low .side-buffer-dot { animation: none; }
+.perf-low #ambient .glow { filter: none; animation: none; }
+.perf-low .clip-dot, .perf-low .side-buffer-dot,
+.perf-low .rec-dot.live, .perf-low .rec-dot.session { animation: none; }
+.perf-low .view { animation: none; }
 .perf-low .modal, .perf-low .modal.viewer-modal, .perf-low .tutorial-box,
 .perf-low .restart-box, .perf-low .npl-box { background: var(--float-solid); }
 .perf-low #player-bar, .perf-low .toast, .perf-low .quit-float,

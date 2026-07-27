@@ -44,7 +44,9 @@ let dragging  = null;
 // Software-compositing mode: vice-app appends sw=1 when GPU compositing
 // failed and the window relaunched in software mode. The UI drops its
 // backdrop blurs and ambient effects (see .perf-low rules) because they
-// are what makes software rendering feel laggy.
+// are what makes software rendering feel laggy. This only covers the
+// failure vice-app can see; perf.js catches the silent one by timing
+// frames.
 const IS_SOFTWARE_RENDER = (() => {
   try { return new URLSearchParams(location.search).get('sw') === '1'; }
   catch (_) { return false; }

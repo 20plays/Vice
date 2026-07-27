@@ -562,6 +562,21 @@ def _prepare_webview_environment() -> None:
         this set. The failure is intermittent, so nothing is persisted —
         every fresh launch tries the GPU first.
 
+    QtWebEngine can also refuse GPU compositing without reporting it at
+    all: no error, no black window, it just adds --disable-gpu-compositing
+    to its own renderers and draws every frame on the CPU. On an NVIDIA
+    RTX 4060 with driver 610.43.02 and Qt 6.11 that is the only outcome
+    available, and a bare QWebEngineView reproduces it with no pywebview
+    and no Vice flags involved. Measured as making no difference there:
+    --enable-features=Vulkan, --use-angle=gl, --use-angle=vulkan,
+    --ignore-gpu-blocklist, --render-node-override, QT_XCB_GL_INTEGRATION,
+    QSG_RHI_BACKEND, and the native Wayland Qt platform (--use-gl=desktop
+    just segfaults). Electron apps on the same machine do composite on the
+    GPU, so this is QtWebEngine's integration rather than the driver.
+    Nothing here can fix it, so the UI measures its own frame rate instead
+    and turns the expensive effects down when they are not affordable
+    (see ui/scripts/perf.js).
+
     Users can replace the flags by setting QTWEBENGINE_CHROMIUM_FLAGS
     themselves, or append extra flags via VICE_WEBVIEW_FLAGS.
     """

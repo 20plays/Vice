@@ -715,6 +715,17 @@
                   <div class="swatch"        data-theme="orange" title="Orange" style="background:#f97316" onclick="setTheme('orange')"></div>
                 </div>
               </div>
+              <div class="settings-row">
+                <div class="s-label">
+                  <strong>Visual effects</strong>
+                  <span>The glass blurs and the drifting background need a GPU. Auto measures how fast frames arrive here and turns them down when they cannot keep up. <span id="s-effects-note"></span></span>
+                </div>
+                <select id="s-effects" onchange="setEffectsMode(this.value)">
+                  <option value="auto">Auto</option>
+                  <option value="full">Full</option>
+                  <option value="reduced">Reduced</option>
+                </select>
+              </div>
             </div>
 
             <div class="settings-card" data-section="advanced">
@@ -1284,6 +1295,7 @@
 <script src="/scripts/state.js?v=__VICE_VERSION__"></script>
 <script src="/scripts/helpers.js?v=__VICE_VERSION__"></script>
 <script src="/scripts/theme.js?v=__VICE_VERSION__"></script>
+<script src="/scripts/perf.js?v=__VICE_VERSION__"></script>
 <script src="/scripts/modals.js?v=__VICE_VERSION__"></script>
 <script src="/scripts/nav.js?v=__VICE_VERSION__"></script>
 <script src="/scripts/pywebview.js?v=__VICE_VERSION__"></script>

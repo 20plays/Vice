@@ -12,7 +12,12 @@ function hideBoot() {
   // before the cover comes off, or the pop-in just happens in view.
   requestAnimationFrame(() => requestAnimationFrame(() => {
     boot.classList.add('done');
-    setTimeout(() => boot.remove(), 600);
+    setTimeout(() => {
+      boot.remove();
+      // Only once the splash is gone and the grid has settled, so the
+      // compositor probe measures the real UI and not the boot animation.
+      initEffects();
+    }, 600);
   }));
 }
 
@@ -20,6 +25,8 @@ function hideBoot() {
 // Bootstrap
 // ═══════════════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
+  // vice-app already knows compositing failed when it passes sw=1, so drop the
+  // effects before the first paint. Everything else waits for initEffects().
   if (IS_SOFTWARE_RENDER) document.documentElement.classList.add('perf-low');
 
   // Theme: load before first paint of swatches/colors stick

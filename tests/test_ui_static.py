@@ -320,8 +320,52 @@ class UIStaticCopyTests(unittest.TestCase):
             "/styles/player.css?v=__VICE_VERSION__",
             "/scripts/playlists.js?v=__VICE_VERSION__",
             "/scripts/player.js?v=__VICE_VERSION__",
+            "/scripts/perf.js?v=__VICE_VERSION__",
         ):
             self.assertIn(ref, self.index)
+
+    def test_effects_mode_is_measured_not_guessed(self) -> None:
+        perf = (REPO_ROOT / "vice" / "ui" / "scripts" / "perf.js").read_text()
+        # The engine can drop to software compositing silently, so the verdict
+        # comes from timing real frames rather than from a stderr marker.
+        self.assertIn("requestAnimationFrame", perf)
+        self.assertIn("SLOW_FRAME_MS", perf)
+        # Measuring while the effects are already off would read the cheap UI,
+        # decide the machine is fast, and flip back every launch.
+        self.assertIn("classList.remove('perf-low')", perf)
+        # sw=1 stays a valid shortcut to the same verdict.
+        self.assertIn("IS_SOFTWARE_RENDER", perf)
+        # Persisted server-side: the native window's localStorage does not
+        # survive restarts on every QtWebEngine build.
+        self.assertIn("/api/app-state", perf)
+        self.assertIn("effects_mode", perf)
+
+        init = (REPO_ROOT / "vice" / "ui" / "scripts" / "init.js").read_text()
+        # Probed only once the splash is gone, or it would time the boot
+        # animation instead of the UI.
+        self.assertIn("initEffects()", init)
+
+    def test_effects_setting_offers_every_mode(self) -> None:
+        self.assertIn('id="s-effects"', self.index)
+        for value in ('value="auto"', 'value="full"', 'value="reduced"'):
+            self.assertIn(value, self.index)
+        self.assertIn('id="s-effects-note"', self.index)
+        row = self.index.split('id="s-effects"')[0].split("Visual effects")[1]
+        self.assertNotIn("—", row)
+
+    def test_reduced_effects_stops_the_endless_animations(self) -> None:
+        base = (REPO_ROOT / "vice" / "ui" / "styles" / "base.css").read_text()
+        # While the glows drift, the whole viewport repaints every frame and
+        # every glass surface above them re-blurs, which is the cost this mode
+        # exists to avoid. Dropping the blur alone leaves most of it behind.
+        self.assertIn(".perf-low #ambient .glow { filter: none; animation: none; }", base)
+        self.assertIn(".perf-low .rec-dot.live", base)
+        self.assertIn(".perf-low .view { animation: none; }", base)
+        # .g3 is a circular gradient in a square box, so rotating it is
+        # invisible and only costs a transform the compositor cannot skip.
+        drift3 = [ln for ln in base.splitlines() if "vgDrift3" in ln and "@keyframes" in ln]
+        self.assertTrue(drift3)
+        self.assertNotIn("rotate", drift3[0])
 
 
 EDITOR_SCRIPTS = ("editor-core", "editor-library", "editor-timeline",
