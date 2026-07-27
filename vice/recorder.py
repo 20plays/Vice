@@ -27,6 +27,7 @@ import signal
 import subprocess
 import time
 from abc import ABC, abstractmethod
+from collections import deque
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -854,6 +855,12 @@ def _gsr_monitor_listing_line(line: str) -> bool:
     return False
 
 
+def _gsr_progress_line(line: str) -> bool:
+    """GSR prints a throughput line every second. Keeping those would push the
+    one line that explains a death straight out of the tail."""
+    return bool(re.match(r"^\s*(update|damage)\s+fps:", line, re.IGNORECASE))
+
+
 def _gsr_runtime_error(raw: str) -> Optional[str]:
     lines = [line.strip() for line in raw.splitlines() if line.strip()]
     for line in reversed(lines):
@@ -903,6 +910,58 @@ async def _read_stream_text(stream) -> str:
     except Exception:
         return ""
     return _combine_process_output(data)
+
+
+async def _spawn_capture(cmd: list[str], stderr) -> asyncio.subprocess.Process:
+    """Start a capture process as its own process-group leader.
+
+    gpu-screen-recorder forks a privileged gsr-kms-server helper. Signalling
+    GSR alone leaves that helper running, and because it inherited GSR's
+    stderr it holds the write end of our pipe open forever, so asyncio never
+    tears the transport down. That leaked one process and one fd per restart
+    until the daemon hit EMFILE and stopped clipping (#129). Own group means
+    the helper can be reaped with the recorder.
+    """
+    return await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=stderr,
+        start_new_session=True,
+    )
+
+
+def _signal_group(proc: asyncio.subprocess.Process, sig: int) -> None:
+    """Signal a capture process's whole group, helpers included.
+
+    An empty group is the ordinary outcome once everything has exited, so
+    ProcessLookupError is not an error here.
+    """
+    try:
+        os.killpg(proc.pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+async def _terminate_group(proc: asyncio.subprocess.Process, timeout: float = 5.0) -> None:
+    """Ask a capture process group to stop, then make sure it did.
+
+    The SIGKILL still reaches surviving members after the leader has been
+    reaped, which is exactly the case that used to strand gsr-kms-server.
+    """
+    _signal_group(proc, signal.SIGTERM)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        pass
+    except ProcessLookupError:
+        pass
+    except Exception as exc:
+        log.warning("Error while stopping capture process: %s", exc)
+    _signal_group(proc, signal.SIGKILL)
+    try:
+        await proc.wait()
+    except Exception:
+        pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -976,6 +1035,11 @@ class Recorder(ABC):
     def on_clip_saved(self, cb: Callable[[Path], None]) -> None:
         """Register a callback invoked with the clip Path once it's ready."""
         self._clip_callbacks.append(cb)
+
+    def last_output(self) -> str:
+        """Recent output from the capture process, for diagnosing a death.
+        Backends that do not capture stderr return nothing."""
+        return ""
 
     async def _clip_tag(self) -> Optional[str]:
         """Sanitized filename tag for the clip being saved, or None."""
@@ -1059,11 +1123,7 @@ class Recorder(ABC):
             else asyncio.subprocess.DEVNULL
         )
         try:
-            self._session_proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=stderr_target,
-            )
+            self._session_proc = await _spawn_capture(cmd, stderr_target)
         except Exception as exc:
             log.error("Failed to start session recording: %s", exc)
             return None
@@ -1078,6 +1138,9 @@ class Recorder(ABC):
                 stderr_text,
             )
             log.error("Session recorder failed to start: %s", detail)
+            # Session recording uses GSR on Wayland, so the same helper can
+            # be left behind here (#129).
+            _signal_group(self._session_proc, signal.SIGKILL)
             self._session_proc = None
             self._session_program = ""
             return None
@@ -1107,14 +1170,10 @@ class Recorder(ABC):
         self._session_path = None
         self._session_program = ""
 
-        # Ask ffmpeg/wf-recorder to stop gracefully
-        try:
-            proc.terminate()
-            await asyncio.wait_for(proc.wait(), timeout=8)
-        except asyncio.TimeoutError:
-            proc.kill()
-        except Exception as exc:
-            log.warning("Session stop signal error: %s", exc)
+        # Ask the recorder to stop gracefully, then reap anything it forked.
+        # The SIGKILL only lands after the leader has exited, so it can never
+        # cut a container short.
+        await _terminate_group(proc, timeout=8)
 
         stderr_text = await _read_stream_text(proc.stderr)
         if not path or not path.exists():
@@ -1591,6 +1650,8 @@ class GSRRecorder(Recorder):
         self._proc: Optional[asyncio.subprocess.Process] = None
         self._out_dir = resolve_path(cfg.output.directory)
         self._watch_task: Optional[asyncio.Task] = None
+        # Kept so an unexpected death can say why instead of just "died".
+        self._stderr_tail: deque[str] = deque(maxlen=12)
 
     @property
     def name(self) -> str:
@@ -1646,11 +1707,8 @@ class GSRRecorder(Recorder):
         log.info("Starting GSR: %s", " ".join(cmd))
         self._running = True
 
-        self._proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        self._stderr_tail.clear()
+        self._proc = await _spawn_capture(cmd, asyncio.subprocess.PIPE)
         try:
             await asyncio.wait_for(self._proc.wait(), timeout=1.0)
             stderr_text = await _read_stream_text(self._proc.stderr)
@@ -1659,6 +1717,8 @@ class GSRRecorder(Recorder):
                 self._proc.returncode,
                 stderr_text,
             )
+            # GSR may have forked its helper before giving up.
+            _signal_group(self._proc, signal.SIGKILL)
             self._proc = None
             self._running = False
             raise RuntimeError(f"gpu-screen-recorder failed to start: {detail}")
@@ -1669,26 +1729,23 @@ class GSRRecorder(Recorder):
     async def _stderr_reader(self) -> None:
         assert self._proc and self._proc.stderr
         async for line in self._proc.stderr:
-            log.debug("gsr: %s", line.decode().rstrip())
+            text = line.decode(errors="replace").rstrip()
+            if text and not _gsr_progress_line(text):
+                self._stderr_tail.append(text)
+            log.debug("gsr: %s", text)
+
+    def last_output(self) -> str:
+        """GSR's last non-routine stderr, for explaining an unexpected death.
+        Empty when it said nothing, which is the honest answer for a process
+        that was simply killed."""
+        return "\n".join(self._stderr_tail)
 
     async def stop(self) -> None:
         self._running = False
         if self._proc:
             proc = self._proc
             self._proc = None
-            try:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                    await proc.wait()
-                except ProcessLookupError:
-                    pass
-            except ProcessLookupError:
-                pass
-            except Exception as exc:
-                log.warning("Error while stopping GSR process: %s", exc)
+            await _terminate_group(proc)
         if self._watch_task:
             self._watch_task.cancel()
             self._watch_task = None

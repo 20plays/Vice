@@ -93,6 +93,11 @@ USER_ICON_FILE = (
 )
 DAEMON_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice.log"
 
+# Consecutive unexpected recorder deaths before the watchdog starts backing
+# off. Two is normal turbulence (a driver reset, a suspend edge); a third in a
+# row means the recorder is not coming back on its own.
+_RECORDER_DEATH_BACKOFF_AFTER = 3
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Daemon
@@ -327,6 +332,7 @@ class ViceDaemon:
         one tick means the machine slept."""
         interval = 5.0
         backoff = interval
+        deaths = 0
         last_wall = time.time()
         while True:
             await asyncio.sleep(interval)
@@ -335,11 +341,24 @@ class ViceDaemon:
             last_wall = now
             if self.recorder.is_healthy() and not resumed:
                 backoff = interval
+                deaths = 0
                 continue
             if resumed:
                 log.info("Resume from suspend detected — restarting the recorder")
             else:
-                log.error("Recorder process died unexpectedly — restarting")
+                deaths += 1
+                # The capture process's own output is the only thing that says
+                # why it died. Without it a fatal encoder error is invisible at
+                # default log level and the UI still claims to be recording
+                # (#129).
+                tail = self.recorder.last_output()
+                if tail:
+                    log.error(
+                        "Recorder process died unexpectedly — restarting. Last output from %s:\n%s",
+                        self.recorder.name, tail,
+                    )
+                else:
+                    log.error("Recorder process died unexpectedly — restarting")
             try:
                 async with self._config_apply_lock:
                     async with self._clip_lock:
@@ -354,9 +373,20 @@ class ViceDaemon:
                 backoff = min(backoff * 2, 300.0)
                 last_wall = time.time()
                 continue
-            backoff = interval
             log.info("Recorder restarted (backend=%s)", self.recorder.name)
             self._broadcast_status(recording=True)
+            # A process that clears the startup probe and then dies seconds
+            # later never reaches the failed-start path above, so without this
+            # an unrecoverably broken recorder is retried at full speed
+            # forever (#129).
+            if not resumed and deaths >= _RECORDER_DEATH_BACKOFF_AFTER:
+                log.error(
+                    "Recorder has died %d times in a row — waiting %.0f s before the next attempt",
+                    deaths, backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 300.0)
+                last_wall = time.time()
 
     def _wire_recorder(self, recorder) -> None:
         """Attach the daemon's callbacks to a recorder. Fires for the initial
@@ -772,7 +802,7 @@ class ViceDaemon:
             entry   = {"time": round(elapsed, 3), "label": label, "color": color}
             self._session_highlights.append(entry)
             click.echo(f"[Vice] Session highlight at {elapsed:.1f}s", err=True)
-            audio.play_highlight()
+            audio.play_highlight(self.cfg.notifications.sound_volume)
             if self.share:
                 asyncio.create_task(
                     self.share.broadcast({
@@ -794,7 +824,7 @@ class ViceDaemon:
             click.echo("[Vice] Clip triggered!", err=True)
             if self.share:
                 await self.share.broadcast({"type": "clip_saving"})
-            audio.play_clip()
+            audio.play_clip(self.cfg.notifications.sound_volume)
             saved = await self.recorder.save_clip(duration)
             if saved is None and self.share:
                 await self.share.broadcast({
@@ -832,7 +862,7 @@ class ViceDaemon:
             return
         self._session_active = True
         self._session_path   = path
-        audio.play_session_start()
+        audio.play_session_start(self.cfg.notifications.sound_volume)
         click.echo(f"[Vice] Session recording started → {path}", err=True)
         if self.share:
             asyncio.create_task(
@@ -849,7 +879,7 @@ class ViceDaemon:
         path = await self.recorder.stop_session()
         self._session_path = None
 
-        audio.play_session_end()
+        audio.play_session_end(self.cfg.notifications.sound_volume)
         if path and self.share:
             slug = path.stem
             url  = self.share.add_clip(path)

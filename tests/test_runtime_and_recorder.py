@@ -1,6 +1,7 @@
 import asyncio
 import os
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -14,6 +15,7 @@ from unittest import mock
 from vice import app as app_mod
 from vice import config as config_mod
 from vice import main as main_mod
+from vice.main import _RECORDER_DEATH_BACKOFF_AFTER
 from vice.config import Config, HotkeyClipPreset, HotkeyConfig, OutputConfig, RecordingConfig, SharingConfig
 from vice.recorder import (
     GSRRecorder,
@@ -636,12 +638,16 @@ class _FakeRecorder:
         self.start_calls = 0
         self.stop_calls = 0
         self.start_error: Exception | None = None
+        self.output = ""
 
     def on_clip_saved(self, cb) -> None:
         self._cb = cb
 
     def is_healthy(self) -> bool:
         return self.healthy
+
+    def last_output(self) -> str:
+        return self.output
 
     async def start(self) -> None:
         self.start_calls += 1
@@ -1702,17 +1708,42 @@ class _FakeStream:
     async def read(self) -> bytes:
         return self._data
 
+    # A real StreamReader iterates line by line, which is how the stderr
+    # reader consumes it.
+    def __aiter__(self):
+        async def _lines():
+            for line in self._data.splitlines(keepends=True):
+                yield line
+        return _lines()
+
 
 class _FakeProcess:
-    def __init__(self, returncode: int, stderr: bytes = b"") -> None:
+    # A pid is part of the interface now: capture processes are killed by
+    # group, so anything standing in for one needs to be addressable (#129).
+    def __init__(self, returncode: int, stderr: bytes = b"", pid: int = 424242) -> None:
         self.returncode = returncode
         self.stderr = _FakeStream(stderr)
+        self.pid = pid
 
     async def wait(self) -> int:
         return self.returncode
 
     def terminate(self) -> None:
         return None
+
+    def kill(self) -> None:
+        return None
+
+
+def _capture_killpg():
+    """Patch os.killpg and record (pgid, signal) instead of signalling a real
+    process group. Tests must never send signals outside themselves."""
+    calls: list[tuple[int, int]] = []
+    patcher = mock.patch(
+        "vice.recorder.os.killpg",
+        side_effect=lambda pgid, sig: calls.append((pgid, sig)),
+    )
+    return patcher, calls
 
 
 class RecorderSessionTests(unittest.IsolatedAsyncioTestCase):
@@ -1725,7 +1756,8 @@ class RecorderSessionTests(unittest.IsolatedAsyncioTestCase):
             b"gpu-screen-recorder: invalid capture target DP-1|2560x1440\n",
         )
 
-        with mock.patch(
+        killpg, kills = _capture_killpg()
+        with killpg, mock.patch(
             "vice.recorder.asyncio.create_subprocess_exec",
             new=mock.AsyncMock(return_value=proc),
         ):
@@ -1733,6 +1765,9 @@ class RecorderSessionTests(unittest.IsolatedAsyncioTestCase):
                 await recorder.start()
 
         self.assertIn("gpu-screen-recorder failed to start", str(ctx.exception))
+        # GSR can fork gsr-kms-server before giving up, so a failed start has
+        # to take the group with it (#129).
+        self.assertIn((proc.pid, signal.SIGKILL), kills)
 
     async def test_gsr_start_reports_error_line_instead_of_monitor_listing(self) -> None:
         recorder = GSRRecorder(
@@ -1745,7 +1780,8 @@ class RecorderSessionTests(unittest.IsolatedAsyncioTestCase):
             b'"DP-4" (1920x1080+1920+0)\n',
         )
 
-        with mock.patch(
+        killpg, _ = _capture_killpg()
+        with killpg, mock.patch(
             "vice.recorder.asyncio.create_subprocess_exec",
             new=mock.AsyncMock(return_value=proc),
         ):
@@ -1786,7 +1822,8 @@ class RecorderSessionTests(unittest.IsolatedAsyncioTestCase):
             b"wf-recorder: unrecognized option '--force-yuv'\n",
         )
 
-        with mock.patch("vice.recorder._is_wayland", return_value=True):
+        killpg, _ = _capture_killpg()
+        with killpg, mock.patch("vice.recorder._is_wayland", return_value=True):
             with mock.patch("vice.recorder._has", side_effect=lambda tool: tool == "wf-recorder"):
                 with mock.patch("vice.recorder._wf_supports_flag", return_value=False):
                     with mock.patch(
@@ -1796,6 +1833,74 @@ class RecorderSessionTests(unittest.IsolatedAsyncioTestCase):
                         path = await recorder.start_session()
 
         self.assertIsNone(path)
+
+    async def test_gsr_runs_in_its_own_process_group(self) -> None:
+        recorder = GSRRecorder(
+            Config(output=OutputConfig(directory="/tmp/vice-test"))
+        )
+        proc = _FakeProcess(None)
+
+        async def _never_exits() -> int:
+            await asyncio.sleep(3600)
+            return 0
+
+        proc.wait = _never_exits  # type: ignore[method-assign]
+        spawn = mock.AsyncMock(return_value=proc)
+        with mock.patch("vice.recorder.asyncio.create_subprocess_exec", new=spawn):
+            await recorder.start()
+        if recorder._watch_task:
+            recorder._watch_task.cancel()
+
+        # Without its own session, signalling GSR leaves gsr-kms-server holding
+        # the stderr pipe open and the fd is never reclaimed (#129).
+        self.assertTrue(spawn.call_args.kwargs.get("start_new_session"))
+
+    async def test_gsr_stop_kills_the_whole_group(self) -> None:
+        recorder = GSRRecorder(
+            Config(output=OutputConfig(directory="/tmp/vice-test"))
+        )
+        proc = _FakeProcess(0)
+        recorder._proc = proc
+        recorder._running = True
+
+        killpg, kills = _capture_killpg()
+        with killpg:
+            await recorder.stop()
+
+        # Terminate the group, then make sure any forked helper is gone.
+        self.assertEqual(kills, [(proc.pid, signal.SIGTERM), (proc.pid, signal.SIGKILL)])
+        self.assertIsNone(recorder._proc)
+
+    async def test_gsr_keeps_stderr_for_diagnosing_a_death(self) -> None:
+        recorder = GSRRecorder(
+            Config(output=OutputConfig(directory="/tmp/vice-test"))
+        )
+        proc = _FakeProcess(
+            None,
+            b"gsr error: no encoder found\n"
+            + b"update fps: 60, damage fps: 60\n" * 30
+            + b"fatal: giving up\n",
+        )
+        recorder._proc = proc
+        await recorder._stderr_reader()
+
+        # The watchdog logs this; without it a fatal encoder error is invisible
+        # at the default log level (#129). GSR's per-second throughput line
+        # would otherwise evict the only line that matters.
+        self.assertIn("no encoder found", recorder.last_output())
+        self.assertIn("giving up", recorder.last_output())
+        self.assertNotIn("damage fps", recorder.last_output())
+
+    async def test_gsr_reports_nothing_when_it_said_nothing(self) -> None:
+        recorder = GSRRecorder(
+            Config(output=OutputConfig(directory="/tmp/vice-test"))
+        )
+        recorder._proc = _FakeProcess(None, b"update fps: 60, damage fps: 60\n" * 5)
+        await recorder._stderr_reader()
+
+        # A process that was simply killed has nothing to explain, and an
+        # empty tail keeps the watchdog's log line short.
+        self.assertEqual(recorder.last_output(), "")
 
 
 class RecordingLimitTests(unittest.TestCase):
@@ -2013,6 +2118,41 @@ class RecorderWatchdogTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(m.get("recording") for m in daemon.share.messages),
             daemon.share.messages,
+        )
+
+    async def test_repeated_deaths_start_backing_off(self) -> None:
+        # A recorder that clears the 1 s startup probe and then dies never
+        # reaches the failed-start path, so before #129 it was restarted at
+        # full speed forever. One reporter logged 1019 restarts in under two
+        # hours, each leaking a process and an fd.
+        recorder = _FakeRecorder()
+        recorder.healthy = False   # dies again right after every restart
+        daemon = self._daemon(recorder)
+
+        sleeps = await self._run_watchdog(daemon, max_sleeps=12)
+
+        interval_sleeps = [s for s in sleeps if s == 5.0]
+        backoff_sleeps = [s for s in sleeps if s > 5.0]
+        self.assertTrue(backoff_sleeps, sleeps)
+        # Doubling, not a flat retry.
+        self.assertEqual(backoff_sleeps, sorted(backoff_sleeps))
+        self.assertGreaterEqual(backoff_sleeps[-1], 10.0)
+        # The first couple of deaths are still retried promptly.
+        self.assertGreaterEqual(len(interval_sleeps), _RECORDER_DEATH_BACKOFF_AFTER)
+
+    async def test_death_logs_the_recorder_output(self) -> None:
+        recorder = _FakeRecorder()
+        recorder.healthy = False
+        recorder.heal_on_start = True
+        recorder.output = "gsr error: no encoder found"
+        daemon = self._daemon(recorder)
+
+        with self.assertLogs("vice", level="ERROR") as logs:
+            await self._run_watchdog(daemon, max_sleeps=3)
+
+        self.assertTrue(
+            any("no encoder found" in line for line in logs.output),
+            logs.output,
         )
 
     async def test_healthy_recorder_is_left_alone(self) -> None:
@@ -2396,3 +2536,4 @@ class UpdateNoticeTests(unittest.IsolatedAsyncioTestCase):
 
         fetch.assert_not_called()
         self.assertEqual(found["version"], self._bump(__version__))
+
