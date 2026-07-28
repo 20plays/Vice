@@ -98,5 +98,6 @@
   {"name": "Dave the Diver", "matches": ["DaveTheDiver.exe", "davethediver", "dave the diver", "steam_app_1868140"]},
   {"name": "Vampire Survivors", "matches": ["VampireSurvivors.exe", "vampiresurvivors", "steam_app_1794680"]},
   {"name": "Tekken 8", "matches": ["Tekken8.exe", "tekken8", "tekken 8", "steam_app_1778820"]},
-  {"name": "Street Fighter 6", "matches": ["StreetFighter6.exe", "sf6.exe", "streetfighter6", "steam_app_1364780"]}
+  {"name": "Street Fighter 6", "matches": ["StreetFighter6.exe", "sf6.exe", "streetfighter6", "steam_app_1364780"]},
+  {"name": "Guilty Gear Strive", "matches": ["GGST.exe", "GGST-Win64-Shipping.exe", "guiltygearstrive", "steam_app_1384160"]}
 ]
