@@ -26,6 +26,7 @@ import shutil
 import signal
 import subprocess
 import time
+import unicodedata
 from abc import ABC, abstractmethod
 from collections import deque
 from datetime import datetime
@@ -185,7 +186,28 @@ def _gsr_has_any_flag(args: list[str], *flags: str) -> bool:
     return False
 
 
-def _gsr_codec_for_encoder(encoder: str) -> Optional[str]:
+def _color_depth(rc) -> str:
+    """Validated bits per channel ("8" or "10")."""
+    value = str(getattr(rc, "color_depth", "") or "8").strip()
+    if value not in {"8", "10"}:
+        log.warning("Unknown recording.color_depth=%r — using 8", value)
+        return "8"
+    return value
+
+
+def _gsr_codec_for_encoder(encoder: str, depth: str = "8") -> Optional[str]:
+    """The gpu-screen-recorder -k value for an encoder choice, or None to let
+    GSR pick. 10-bit only exists for HEVC and AV1, so a 10-bit request with
+    H.264 or auto resolves to HEVC."""
+    if depth == "10":
+        if encoder in {"av1", "av1_nvenc", "av1_vaapi", "libaom-av1", "libsvtav1"}:
+            return "av1_10bit"
+        if encoder not in {"hevc", "hevc_nvenc", "hevc_vaapi", "libx265"}:
+            log.info(
+                "10-bit colour needs HEVC or AV1 (encoder=%s); recording HEVC 10-bit",
+                encoder,
+            )
+        return "hevc_10bit"
     if encoder == "auto":
         return None
     if encoder in {"h264", "h264_nvenc", "h264_vaapi", "libx264"}:
@@ -331,8 +353,10 @@ def _gsr_sanitize_args(args: list[str], blocked_flags: set[str]) -> list[str]:
     return out
 
 
-def _selected_display_id(rc) -> Optional[str]:
-    value = getattr(rc, "display", None)
+def _selected_display_id(rc, override: Optional[str] = None) -> Optional[str]:
+    """The display to capture. `override` is the live follow-the-pointer pick,
+    which wins over the saved choice without overwriting it."""
+    value = override if override is not None else getattr(rc, "display", None)
     if value is None:
         return None
     selected = str(value).strip()
@@ -595,8 +619,8 @@ def list_gsr_audio_sources() -> dict:
     return {"sources": deduped, "warning": warning}
 
 
-def _resolve_display_option(rc, backend: str) -> Optional[dict]:
-    selected = _selected_display_id(rc)
+def _resolve_display_option(rc, backend: str, override: Optional[str] = None) -> Optional[dict]:
+    selected = _selected_display_id(rc, override)
     if not selected:
         return None
     normalized_selected = selected.split("|", 1)[0].strip()
@@ -613,13 +637,13 @@ def _default_gsr_capture_target() -> str:
     return "screen"
 
 
-def _gsr_capture_target(rc) -> str:
-    selected = _resolve_display_option(rc, "gsr")
+def _gsr_capture_target(rc, override: Optional[str] = None) -> str:
+    selected = _resolve_display_option(rc, "gsr", override)
     return str(selected["id"]) if selected else _default_gsr_capture_target()
 
 
-def _wf_capture_target(rc) -> Optional[str]:
-    selected = _resolve_display_option(rc, "wf-recorder")
+def _wf_capture_target(rc, override: Optional[str] = None) -> Optional[str]:
+    selected = _resolve_display_option(rc, "wf-recorder", override)
     return str(selected["id"]) if selected else None
 
 
@@ -654,9 +678,9 @@ def _merge_ffmpeg_filters(flags: list[str], extra_filter: Optional[str]) -> list
     return out
 
 
-def _ffmpeg_x11_input_args(rc) -> tuple[list[str], Optional[str]]:
+def _ffmpeg_x11_input_args(rc, override: Optional[str] = None) -> tuple[list[str], Optional[str]]:
     display = os.environ.get("DISPLAY", ":0")
-    selected = _resolve_display_option(rc, "ffmpeg")
+    selected = _resolve_display_option(rc, "ffmpeg", override)
     if selected:
         video_size = f"{selected['width']}x{selected['height']}"
         input_display = f"{display}+{selected['x']},{selected['y']}"
@@ -1000,15 +1024,23 @@ def choose_encoder(preferred: str) -> str:
     return "libx264"
 
 
-def _encoder_flags(encoder: str, crf: int) -> list[str]:
+def _encoder_flags(encoder: str, crf: int, depth: str = "8") -> list[str]:
     """Return ffmpeg flags for a given encoder."""
+    # No hardware encoder does 10-bit H.264, and x264 10-bit needs a separate
+    # build, so those keep 8-bit whatever the setting says.
+    ten_bit = depth == "10" and encoder not in ("h264_nvenc", "h264_vaapi", "libx264")
+    if depth == "10" and not ten_bit:
+        log.info("10-bit colour needs HEVC or AV1 (encoder=%s); recording 8-bit", encoder)
     if encoder in ("h264_nvenc", "hevc_nvenc", "av1_nvenc"):
         # NVENC: use CQ mode (similar to CRF) and tuning for low-latency
-        return ["-c:v", encoder, "-rc", "vbr", "-cq", str(crf), "-preset", "p4", "-tune", "hq"]
+        flags = ["-c:v", encoder, "-rc", "vbr", "-cq", str(crf), "-preset", "p4", "-tune", "hq"]
+        return flags + (["-pix_fmt", "p010le"] if ten_bit else [])
     if encoder in ("h264_vaapi", "hevc_vaapi", "av1_vaapi"):
-        return ["-vf", "format=nv12,hwupload", "-c:v", encoder, "-qp", str(crf)]
+        upload = "format=p010,hwupload" if ten_bit else "format=nv12,hwupload"
+        return ["-vf", upload, "-c:v", encoder, "-qp", str(crf)]
     # libx264 / libx265 software
-    return ["-c:v", encoder, "-crf", str(crf), "-preset", "fast"]
+    flags = ["-c:v", encoder, "-crf", str(crf), "-preset", "fast"]
+    return flags + (["-pix_fmt", "yuv420p10le"] if ten_bit else [])
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1025,6 +1057,10 @@ class Recorder(ABC):
         # Optional sync callback returning the focused game's name (or None);
         # used to tag clip filenames. Runs in a thread (it shells out).
         self.clip_tag_cb: Optional[Callable[[], Optional[str]]] = None
+        # Display to capture instead of recording.display, set by the daemon
+        # when follow-the-pointer capture is on. Applied at start(), so the
+        # daemon restarts the recorder after changing it.
+        self.display_override: Optional[str] = None
         # Session recording state (shared across all backends)
         self._session_active = False
         self._session_proc: Optional[asyncio.subprocess.Process] = None
@@ -1195,7 +1231,7 @@ class Recorder(ABC):
         if _is_wayland():
             # Prefer gpu-screen-recorder on Wayland (especially smoother on NVIDIA).
             if _has("gpu-screen-recorder"):
-                return self._gsr_session_cmd(out_path, rc)
+                return self._gsr_session_cmd(out_path, rc, self.display_override)
 
             # Fallback: wf-recorder direct-to-file on Wayland.
             if _has("wf-recorder"):
@@ -1215,27 +1251,27 @@ class Recorder(ABC):
 
             # Last resort on XWayland sessions.
             if os.environ.get("DISPLAY") and _has("ffmpeg"):
-                return self._ffmpeg_session_cmd(out_path, encoder, rc)
+                return self._ffmpeg_session_cmd(out_path, encoder, rc, self.display_override)
             return None
 
         if _is_x11() and _has("ffmpeg"):
-            return self._ffmpeg_session_cmd(out_path, encoder, rc)
+            return self._ffmpeg_session_cmd(out_path, encoder, rc, self.display_override)
 
         return None
 
     @staticmethod
-    def _gsr_session_cmd(out_path: Path, rc) -> list[str]:
+    def _gsr_session_cmd(out_path: Path, rc, override: Optional[str] = None) -> list[str]:
         extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o", "-r"})
         cmd = ["gpu-screen-recorder"]
 
         if not _gsr_has_any_flag(extra, "-w"):
-            cmd += ["-w", _gsr_capture_target(rc)]
+            cmd += ["-w", _gsr_capture_target(rc, override)]
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
         cmd += _gsr_resolution_args(rc, extra)
         if not _gsr_has_any_flag(extra, "-c"):
             cmd += ["-c", "mp4"]
-        codec = _gsr_codec_for_encoder(rc.encoder)
+        codec = _gsr_codec_for_encoder(rc.encoder, _color_depth(rc))
         if codec and not _gsr_has_any_flag(extra, "-k"):
             cmd += ["-k", codec]
         if not _gsr_has_any_flag(extra, "-a"):
@@ -1246,12 +1282,14 @@ class Recorder(ABC):
         return cmd
 
     @staticmethod
-    def _ffmpeg_session_cmd(out_path: Path, encoder: str, rc) -> list[str]:
+    def _ffmpeg_session_cmd(
+        out_path: Path, encoder: str, rc, override: Optional[str] = None
+    ) -> list[str]:
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning"]
-        input_args, extra_filter = _ffmpeg_x11_input_args(rc)
+        input_args, extra_filter = _ffmpeg_x11_input_args(rc, override)
         cmd += input_args
         cmd += _ffmpeg_audio_input_args(rc)
-        cmd += _merge_ffmpeg_filters(_encoder_flags(encoder, rc.crf), extra_filter)
+        cmd += _merge_ffmpeg_filters(_encoder_flags(encoder, rc.crf, _color_depth(rc)), extra_filter)
         cmd += _ffmpeg_audio_output_args(rc)
         cmd += ["-y", str(out_path)]
         return cmd
@@ -1303,6 +1341,27 @@ def _sanitize_clip_name(name: str) -> str:
     name = re.sub(r"[/\\\x00-\x1f]", "", name)
     name = re.sub(r"[_-]{2,}", lambda m: m.group(0)[0], name)
     return name.strip("_- .")
+
+
+# Anything outside this set is dropped from a user-chosen clip name. Slugs are
+# filename stems *and* URL path segments *and* arguments to inline UI handlers,
+# so a name is only safe once it survives all three: spaces break share links,
+# quotes break the handlers, and "#?%&" break both (#138).
+_SLUG_KEEP = re.compile(r"[^\w.\-]", re.UNICODE)
+
+
+def slugify_clip_name(name: str) -> Optional[str]:
+    """Turn a user-typed clip name into a filename stem.
+
+    Whitespace runs become a single dash and unsupported punctuation is
+    dropped; casing is left alone. Returns None when nothing usable is left.
+    """
+    name = unicodedata.normalize("NFC", (name or "").strip())
+    if name.lower().endswith((".mp4", ".mkv")):
+        name = name[:-4]
+    name = re.sub(r"\s+", "-", name)
+    name = _SLUG_KEEP.sub("", name)
+    return _sanitize_clip_name(name) or None
 
 
 def _render_clip_name(template: str, n: int, game: Optional[str], now: datetime) -> str:
@@ -1667,7 +1726,7 @@ class GSRRecorder(Recorder):
 
         # Allow manual overrides through recording.gsr_args.
         if not _gsr_has_any_flag(extra, "-w"):
-            cmd += ["-w", _gsr_capture_target(rc)]
+            cmd += ["-w", _gsr_capture_target(rc, self.display_override)]
 
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
@@ -1688,7 +1747,7 @@ class GSRRecorder(Recorder):
 
         if not _gsr_has_any_flag(extra, "-c"):
             cmd += ["-c", _container(rc)]
-        codec = _gsr_codec_for_encoder(rc.encoder)
+        codec = _gsr_codec_for_encoder(rc.encoder, _color_depth(rc))
         if codec and not _gsr_has_any_flag(extra, "-k"):
             cmd += ["-k", codec]
 
@@ -1865,7 +1924,7 @@ class SegmentRecorder(Recorder):
         if rc.resolution:
             # wf-recorder geometry flag
             pass  # resolution is auto by default; geometry can be set with -g
-        target = _wf_capture_target(rc)
+        target = _wf_capture_target(rc, self.display_override)
         if target:
             cmd += ["-o", target]
         audio_device = _wf_audio_device(rc)
@@ -1879,16 +1938,22 @@ class SegmentRecorder(Recorder):
             cmd += ["-c", "h264_vaapi", "-d", "/dev/dri/renderD128"]
         else:
             cmd += ["-c", "libx264"]
+        # H.264 is the only codec wf-recorder gets here, and it has no 10-bit
+        # hardware path, so only ask for it on the HEVC encoder.
+        if _color_depth(rc) == "10" and codec == "hevc_nvenc" and _wf_supports_flag("--pixel-format"):
+            cmd += ["-x", "p010le"]
         return cmd
 
     def _ffmpeg_x11_cmd(self, out: Path) -> list[str]:
         rc = self.cfg.recording
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning"]
-        input_args, extra_filter = _ffmpeg_x11_input_args(rc)
+        input_args, extra_filter = _ffmpeg_x11_input_args(rc, self.display_override)
         cmd += input_args
         cmd += _ffmpeg_audio_input_args(rc)
 
-        enc_flags = _merge_ffmpeg_filters(_encoder_flags(self._encoder, rc.crf), extra_filter)
+        enc_flags = _merge_ffmpeg_filters(
+            _encoder_flags(self._encoder, rc.crf, _color_depth(rc)), extra_filter
+        )
         cmd += enc_flags
 
         cmd += _ffmpeg_audio_output_args(rc)

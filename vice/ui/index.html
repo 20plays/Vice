@@ -501,6 +501,14 @@
               </div>
 
               <div class="settings-row">
+                <div class="s-label"><strong>Colour depth</strong><span id="s-depth-note">8-bit suits every player. 10-bit needs an HEVC or AV1 encoder.</span></div>
+                <select id="s-depth">
+                  <option value="8">8-bit (standard)</option>
+                  <option value="10">10-bit (HEVC or AV1)</option>
+                </select>
+              </div>
+
+              <div class="settings-row">
                 <div class="s-label"><strong>Recording backend</strong><span>Screen capture method</span></div>
                 <select id="s-backend" onchange="onBackendChange()">
                   <option value="auto">Auto (recommended)</option>
@@ -508,6 +516,11 @@
                   <option value="wf-recorder">wf-recorder (Wayland)</option>
                   <option value="ffmpeg">ffmpeg (X11)</option>
                 </select>
+              </div>
+
+              <div class="settings-row">
+                <div class="s-label"><strong>Follow my mouse</strong><span id="s-follow-mouse-note">Record whichever monitor the pointer is on. Switching monitors restarts the buffer, so a clip taken right after moving will be short.</span></div>
+                <label class="toggle"><input type="checkbox" id="s-follow-mouse" onchange="onFollowMouseChange()"><span class="toggle-track"></span></label>
               </div>
 
               <div class="settings-row">
@@ -625,6 +638,14 @@
                   <button class="btn-pill btn-ghost-pill btn-sm" onclick="addClipPresetRow()">Add hotkey</button>
                 </div>
               </div>
+
+              <div class="settings-row">
+                <div class="s-label">
+                  <strong>Ignore hotkeys in these apps</strong>
+                  <span>One per line. Vice leaves its keys alone while a matching app is focused, for games that clip on the same keys. Matched against the window process and class, e.g. ggst.exe. Needs X11, Hyprland or Sway.</span>
+                </div>
+                <textarea id="s-hotkey-blocklist" rows="3" placeholder="ggst.exe" style="width:100%;font-family:monospace;font-size:12px;"></textarea>
+              </div>
             </div>
 
             <div class="settings-card" data-section="storage">
@@ -692,7 +713,7 @@
               <div class="settings-row">
                 <div class="s-label">
                   <strong>Custom games</strong>
-                  <span>One game per line: <code>Display Name | match1, match2, match3</code>. Matches are case-insensitive substrings checked against the focused window's process name and class. Bundled list already covers ~100 popular games.</span>
+                  <span>One game per line: <code>Display Name | match1, match2, match3</code>. Matches are case-insensitive substrings checked against the focused window's process name and class. Bundled list already covers over 300 popular games.</span>
                 </div>
                 <textarea id="s-discord-custom-games" rows="4" placeholder="My Game | mygame.exe, MyGameClient" style="width:100%;font-family:monospace;font-size:12px;"></textarea>
               </div>

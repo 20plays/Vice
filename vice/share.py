@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import glob
+import html
 import json
 import logging
 import re
@@ -30,6 +32,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Coroutine, Optional
+from urllib.parse import quote
 
 from importlib.resources import files as _pkg_files
 
@@ -42,7 +45,8 @@ from .editor import (EditorProjectStore, ExportBusy, ExportManager, Source,
                      validate_project)
 from .media import probe_media
 from .playlists import PlaylistStore, build_tag_index
-from .recorder import KEEP_ALL_STREAMS, list_display_options, list_gsr_audio_sources
+from .recorder import (KEEP_ALL_STREAMS, list_display_options,
+                       list_gsr_audio_sources, slugify_clip_name)
 from .runtime import actual_home_dir, resolve_path
 
 log = logging.getLogger("vice.share")
@@ -232,7 +236,7 @@ def _thumb_path(path: Path) -> Path:
 def _purge_slug_thumbs(slug: str) -> None:
     """Remove any cached thumbs for a slug (legacy + versioned variants)."""
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
-    for t in THUMB_DIR.glob(f"{slug}*.jpg"):
+    for t in THUMB_DIR.glob(f"{glob.escape(slug)}*.jpg"):
         t.unlink(missing_ok=True)
 
 
@@ -250,7 +254,7 @@ def _proxy_path(path: Path) -> Path:
 def _purge_slug_proxies(slug: str) -> None:
     """Remove any cached preview proxies for a slug (all file versions)."""
     PROXY_DIR.mkdir(parents=True, exist_ok=True)
-    for p in PROXY_DIR.glob(f"{slug}*.mp4"):
+    for p in PROXY_DIR.glob(f"{glob.escape(slug)}*.mp4"):
         p.unlink(missing_ok=True)
 
 
@@ -666,7 +670,7 @@ class ShareServer:
             "clip": self._clip_json(slug, path, {}),
         }))
         asyncio.create_task(self._broadcast_clip(slug, path))
-        return f"{self.public_base_url()}/c/{slug}"
+        return f"{self.public_base_url()}/c/{quote(slug, safe='')}"
 
     def local_base_url(self) -> Optional[str]:
         return self._local_base_url
@@ -722,8 +726,11 @@ class ShareServer:
         except OSError:
             size, mtime_ns, created_at = 0, 0, ""
 
+        # The slug is a filename, so it can hold spaces and punctuation that
+        # would truncate or corrupt a URL (#138). Encode it in every link.
+        enc = quote(slug, safe="")
         thumb_rev = f"{size}-{mtime_ns}"
-        thumb_url = f"/t/{slug}?v={thumb_rev}" if _thumb_path(path).exists() else None
+        thumb_url = f"/t/{enc}?v={thumb_rev}" if _thumb_path(path).exists() else None
         return {
             "slug":       slug,
             "name":       path.name,
@@ -739,13 +746,13 @@ class ShareServer:
             "vcodec":     meta.get("vcodec",   ""),
             # Keep share links public, but serve media via local relative URLs
             # so the app UI never fetches video through an external tunnel.
-            "share_url":  f"{public_base}/c/{slug}",
+            "share_url":  f"{public_base}/c/{enc}",
             "share_is_public": self.public_is_reachable(),
             # Cache-bust media URLs by clip file identity: deleted clip numbers
             # get reused (Vice_Clip_5 can name a brand-new file), and a trim
             # rewrites the file under the same slug — without the version the
             # browser may play a cached older video for the clip it shows.
-            "video_url":  f"/v/{slug}?v={thumb_rev}",
+            "video_url":  f"/v/{enc}?v={thumb_rev}",
             "thumb_url":  thumb_url,
         }
 
@@ -809,17 +816,18 @@ class ShareServer:
         # Direct file URL with the real container suffix; some unfurlers
         # sniff the extension. _video strips it back off.
         suffix = path.suffix.lower() or ".mp4"
-        html = _EMBED_PAGE.format(
-            title=f"Vice clip — {slug}",
-            page_url=f"{base}/c/{slug}",
-            video_url=f"{base}/v/{slug}{suffix}",
+        enc = quote(slug, safe="")
+        page = _EMBED_PAGE.format(
+            title=html.escape(f"Vice clip — {slug}", quote=True),
+            page_url=f"{base}/c/{enc}",
+            video_url=f"{base}/v/{enc}{suffix}",
             video_type="video/x-matroska" if suffix == ".mkv" else "video/mp4",
-            thumb_url=f"{base}/t/{slug}",
+            thumb_url=f"{base}/t/{enc}",
             width=meta.get("width", 1920),
             height=meta.get("height", 1080),
             color=self._embed_color(),
         )
-        return web.Response(text=html, content_type="text/html")
+        return web.Response(text=page, content_type="text/html")
 
     def _embed_color(self) -> str:
         """Validated embed accent color (guards against HTML injection)."""
@@ -997,19 +1005,19 @@ class ShareServer:
             raise web.HTTPNotFound()
 
         body     = await req.json()
-        new_name = body.get("name", "").strip()
-        if not new_name:
+        requested = str(body.get("name") or "").strip()
+        if not requested:
             return web.json_response({"ok": False, "error": "name is required"})
 
-        # Sanitise — no path separators; keep the clip's own container.
+        # Spaces and punctuation are normalised away rather than rejected, so
+        # "Insane wallbang" saves as Insane-wallbang.mp4. Keep the clip's own
+        # container.
         ext = path.suffix.lower() or ".mp4"
-        new_name = new_name.replace("/", "").replace("\\", "").replace("\0", "")
-        if " " in new_name:
-            return web.json_response({"ok": False, "error": "Clip name cannot contain spaces"})
-        if not new_name.lower().endswith(ext):
-            new_name += ext
+        stem = slugify_clip_name(requested)
+        if not stem:
+            return web.json_response({"ok": False, "error": "that name will not work as a file"})
 
-        new_path = path.parent / new_name
+        new_path = path.parent / f"{stem}{ext}"
         if new_path.exists() and new_path != path:
             return web.json_response({"ok": False, "error": "A clip with that name already exists"})
 
@@ -1042,7 +1050,7 @@ class ShareServer:
         # Tell the UI: old card gone, new card appears
         await self.broadcast({"type": "clip_deleted", "slug": slug})
         asyncio.create_task(self._broadcast_clip(new_slug, new_path))
-        return web.json_response({"ok": True, "slug": new_slug})
+        return web.json_response({"ok": True, "slug": new_slug, "name": new_path.name})
 
     async def _api_reveal(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
@@ -1425,8 +1433,10 @@ class ShareServer:
     async def _api_get_displays(self, req: web.Request) -> web.Response:
         backend = (req.query.get("backend") or self.cfg.recording.backend or "auto").strip() or "auto"
         # Enumeration shells out (with timeouts); keep it off the event loop.
+        from .active_window import pointer_display_supported
         payload = await asyncio.to_thread(list_display_options, backend)
         payload["selected"] = self.cfg.recording.display
+        payload["follow_mouse_supported"] = pointer_display_supported()
         return web.json_response(payload)
 
     async def _api_get_audio_sources(self, _: web.Request) -> web.Response:
@@ -1439,7 +1449,7 @@ class ShareServer:
             Config, RecordingConfig, HotkeyConfig, OutputConfig, SharingConfig,
             DiscordConfig, DiscordCustomGame, UpdatesConfig, NotificationsConfig,
             clamp_recording_limits, ensure_buffer_covers_clip_presets,
-            normalize_clip_presets, normalize_combo,
+            normalize_clip_presets, normalize_combo, normalize_focus_blocklist,
             validate_hotkeys,
             load as load_cfg, save as save_cfg,
         )
@@ -1479,6 +1489,9 @@ class ShareServer:
             )
         except ValueError as exc:
             return web.json_response({"ok": False, "error": str(exc)}, status=400)
+        hotkeys_raw["disable_while_focused"] = normalize_focus_blocklist(
+            hotkeys_raw.get("disable_while_focused")
+        )
 
         new_cfg = Config(
             recording=RecordingConfig(**{

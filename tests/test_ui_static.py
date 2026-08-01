@@ -94,6 +94,44 @@ class UIStaticCopyTests(unittest.TestCase):
         self.assertIn("microphone_volume", settings_js)
         self.assertIn("syncVolumeRows", settings_js)
 
+    def test_clip_card_handlers_escape_the_slug_for_javascript(self) -> None:
+        """#138: slugs are filenames, so they can contain an apostrophe. escAttr
+        alone leaves it decoded back into the inline handler's JS string, which
+        killed every button on the card."""
+        helpers_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "helpers.js").read_text()
+        self.assertIn("function escArg", helpers_js)
+
+        clips_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "clips.js").read_text()
+        for handler in ("openViewer", "startRename", "delClip", "revealClip",
+                        "copyClipFile", "openTrim", "copyLink", "openPlaylistMenu",
+                        "onClipDragStart"):
+            self.assertRegex(
+                clips_js, rf"{handler}\((?:event, )?'\$\{{(?:arg|escArg\()",
+                f"{handler} still interpolates an unescaped slug",
+            )
+        # The old client-side guard is gone; the server normalises instead.
+        self.assertNotIn("Clip name cannot contain spaces", clips_js)
+
+    def test_colour_depth_setting_is_wired(self) -> None:
+        self.assertIn('id="s-depth"', self.index)
+        self.assertIn('value="10"', self.index)
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        self.assertIn("color_depth", settings_js)
+
+    def test_follow_mouse_display_setting_is_wired(self) -> None:
+        self.assertIn('id="s-follow-mouse"', self.index)
+        self.assertIn('id="s-follow-mouse-note"', self.index)
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        self.assertIn("follow_mouse_display", settings_js)
+        self.assertIn("onFollowMouseChange", settings_js)
+        # The picker and follow-the-pointer are alternatives, not both at once.
+        self.assertIn("display.disabled = toggle.checked", settings_js)
+
+    def test_hotkey_blocklist_setting_is_wired(self) -> None:
+        self.assertIn('id="s-hotkey-blocklist"', self.index)
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        self.assertIn("disable_while_focused", settings_js)
+
     def test_trim_preview_loop_is_wired(self) -> None:
         self.assertIn('id="trim-preview-btn"', self.index)
         trim_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "trim.js").read_text()

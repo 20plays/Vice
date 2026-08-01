@@ -458,6 +458,61 @@ class PlaylistApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resp.status, 200)
         self.assertNotIn("auto:minecraft", [p["id"] for p in await self._playlists()])
 
+    async def _clip(self, slug: str) -> dict:
+        async with self.client.get(f"{self.base}/api/clips") as resp:
+            clips = (await resp.json())["clips"]
+        return {c["slug"]: c for c in clips}[slug]
+
+    async def test_rename_normalises_spaces_and_apostrophes(self) -> None:
+        """#138: these used to be rejected outright, or land on disk and break
+        every link and button on the card."""
+        async with self.client.post(f"{self.base}/api/clips/Vice_Clip_2/rename",
+                                    json={"name": "Insane wallbang"}) as resp:
+            payload = await resp.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["slug"], "Insane-wallbang")
+        self.assertEqual(payload["name"], "Insane-wallbang.mp4")
+        self.assertTrue((self.output_dir / "Insane-wallbang.mp4").exists())
+
+        async with self.client.post(f"{self.base}/api/clips/Insane-wallbang/rename",
+                                    json={"name": "Bob's clip"}) as resp:
+            payload = await resp.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["slug"], "Bobs-clip")
+
+    async def test_rename_rejects_a_name_with_nothing_usable_left(self) -> None:
+        async with self.client.post(f"{self.base}/api/clips/Vice_Clip_2/rename",
+                                    json={"name": "???"}) as resp:
+            payload = await resp.json()
+        self.assertFalse(payload["ok"])
+        self.assertTrue((self.output_dir / "Vice_Clip_2.mp4").exists())
+
+    async def test_clip_urls_are_percent_encoded(self) -> None:
+        """A slug is a filename, so a clip renamed outside Vice can still hold
+        characters that would truncate the share link (#138)."""
+        awkward = self.output_dir / "Bob's clip.mp4"
+        awkward.write_bytes(b"not-a-real-mp4")
+        self.server.add_clip(awkward)
+        await asyncio.sleep(0)
+
+        clip = await self._clip("Bob's clip")
+        for key in ("share_url", "video_url", "thumb_url"):
+            url = clip.get(key)
+            if url:
+                self.assertNotIn(" ", url, key)
+                self.assertNotIn("'", url, key)
+        self.assertIn("Bob%27s%20clip", clip["share_url"])
+        self.assertIn("Bob%27s%20clip", clip["video_url"])
+
+        # The embed page the share link points at has to render, and its
+        # og:video must stay a single unbroken URL.
+        async with self.client.get(f"{self.base}/c/Bob's clip") as resp:
+            self.assertEqual(resp.status, 200)
+            page = await resp.text()
+        self.assertIn('content="http://127.0.0.1', page)
+        self.assertIn("Bob%27s%20clip.mp4", page)
+        self.assertNotIn("Bob's clip.mp4", page)
+
     async def test_view_counter_increments_and_follows_the_clip(self) -> None:
         for _ in range(2):
             async with self.client.post(f"{self.base}/api/clips/Vice_Clip_2/view") as resp:

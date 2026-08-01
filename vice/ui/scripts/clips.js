@@ -146,6 +146,7 @@ function cardHTML(c) {
     : '';
   const isNew = recentNew.has(c.slug);
   const slug  = escAttr(c.slug);
+  const arg   = escArg(c.slug);
   const name  = escHtml(c.name || c.slug);
   const viewsStr = c.views ? `${c.views} view${c.views !== 1 ? 's' : ''}` : '';
   const meta  = [dateStr, resStr, sizeStr, viewsStr].filter(Boolean).join(' · ');
@@ -157,13 +158,13 @@ function cardHTML(c) {
     : `<div class="thumb-placeholder">${svgEl('film', 32)}</div>`;
 
   const shareDisabled = !c.share_url;
-  const shareBtn = `<button class="clip-icon-btn" title="${shareDisabled ? 'No share URL yet' : 'Copy share link'}" ${shareDisabled ? 'disabled' : `onclick="copyLink(event, '${escAttr(c.share_url)}', ${c.share_is_public !== false})"`}>${svgEl('link2', 12)}</button>`;
+  const shareBtn = `<button class="clip-icon-btn" title="${shareDisabled ? 'No share URL yet' : 'Copy share link'}" ${shareDisabled ? 'disabled' : `onclick="copyLink(event, '${escArg(c.share_url)}', ${c.share_is_public !== false})"`}>${svgEl('link2', 12)}</button>`;
 
   return `
   <div class="clip-card" id="card-${slug}" draggable="true"
-       ondragstart="onClipDragStart(event, '${slug}')" ondragend="onClipDragEnd(event)"
-       oncontextmenu="openPlaylistMenu(event, '${slug}')">
-    <div class="thumb-wrap" onclick="openViewer('${slug}')" ${hoverHandlers}>
+       ondragstart="onClipDragStart(event, '${arg}')" ondragend="onClipDragEnd(event)"
+       oncontextmenu="openPlaylistMenu(event, '${arg}')">
+    <div class="thumb-wrap" onclick="openViewer('${arg}')" ${hoverHandlers}>
       ${mediaHtml}
       <div class="thumb-play-overlay">${svgEl('play', 38)}</div>
       ${durStr ? `<div class="clip-dur-badge mono">${durStr}</div>` : ''}
@@ -171,15 +172,15 @@ function cardHTML(c) {
     </div>
     <div class="clip-body">
       <div class="clip-copy">
-        <div class="clip-name" title="${escAttr(c.name || c.slug)} — double-click to rename" ondblclick="startRename('${slug}', this)">${name}</div>
+        <div class="clip-name" title="${escAttr(c.name || c.slug)} — double-click to rename" ondblclick="startRename('${arg}', this)">${name}</div>
         <div class="clip-meta mono">${escHtml(meta)}</div>
       </div>
       <div class="clip-actions">
-        <button class="clip-icon-btn" title="Trim" onclick="openTrim('${slug}', '${escAttr(c.video_url || '')}')">${svgEl('scissors', 12)}</button>
-        <button class="clip-icon-btn" title="Copy video to clipboard" onclick="copyClipFile(event, '${slug}')">${svgEl('clipboard', 12)}</button>
+        <button class="clip-icon-btn" title="Trim" onclick="openTrim('${arg}', '${escArg(c.video_url || '')}')">${svgEl('scissors', 12)}</button>
+        <button class="clip-icon-btn" title="Copy video to clipboard" onclick="copyClipFile(event, '${arg}')">${svgEl('clipboard', 12)}</button>
         ${shareBtn}
-        <button class="clip-icon-btn" title="Reveal in file manager" onclick="revealClip('${slug}')">${svgEl('folderOpen', 12)}</button>
-        <button class="clip-icon-btn danger" title="Delete" onclick="delClip('${slug}')">${svgEl('trash2', 12)}</button>
+        <button class="clip-icon-btn" title="Reveal in file manager" onclick="revealClip('${arg}')">${svgEl('folderOpen', 12)}</button>
+        <button class="clip-icon-btn danger" title="Delete" onclick="delClip('${arg}')">${svgEl('trash2', 12)}</button>
       </div>
     </div>
   </div>`;
@@ -277,7 +278,6 @@ function startRename(slug, el) {
     submitted = true;
     const v = input.value.trim();
     if (!v || v === current) { revert(); return; }
-    if (v.includes(' ')) { toast('Clip name cannot contain spaces', 'err'); submitted = false; input.focus(); input.select(); return; }
     try {
       const r = await fetch(`/api/clips/${encodeURIComponent(slug)}/rename`, {
         method: 'POST',
@@ -286,7 +286,12 @@ function startRename(slug, el) {
       });
       const data = await r.json();
       if (!data.ok) { toast(data.error || 'Rename failed', 'err'); revert(); }
-      else { card.classList.remove('renaming'); }
+      else {
+        card.classList.remove('renaming');
+        // Spaces and punctuation are normalised server-side, so say what
+        // actually landed on disk when it differs from what was typed.
+        if (data.slug && data.slug !== v) toast(`Saved as ${data.name || data.slug}`);
+      }
     } catch (_) { toast('Rename failed', 'err'); revert(); }
   };
   const cancel = () => { if (!submitted) { submitted = true; revert(); } };

@@ -98,6 +98,11 @@ DAEMON_LOG_FILE = actual_home_dir() / ".local" / "share" / "vice" / "vice.log"
 # row means the recorder is not coming back on its own.
 _RECORDER_DEATH_BACKOFF_AFTER = 3
 
+# How often follow-the-pointer capture samples which monitor the pointer is on.
+# Two samples must agree before the recorder is retargeted, so a switch costs
+# up to twice this.
+FOLLOW_MOUSE_INTERVAL = 2.0
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Daemon
@@ -139,6 +144,10 @@ class ViceDaemon:
         # Game detected while the most recent clip was being saved, consumed
         # by _on_clip_saved to file the clip into its auto playlist.
         self._last_clip_game: Optional[str] = None
+        # Monitor the pointer is on, when follow-the-pointer capture is on.
+        # None means "use recording.display".
+        self._display_override: Optional[str] = None
+        self._follow_mouse_task: Optional[asyncio.Task] = None
 
     async def run(self) -> None:
         Path("/tmp/vice").mkdir(parents=True, exist_ok=True)
@@ -261,6 +270,7 @@ class ViceDaemon:
             self._discord_task = asyncio.create_task(self._discord_presence_loop())
 
         self._watchdog_task = asyncio.create_task(self._recorder_watchdog_loop())
+        self._sync_follow_mouse_task()
 
         if self.cfg.updates.check_on_start:
             self._update_task = asyncio.create_task(self._update_check_soon())
@@ -396,6 +406,7 @@ class ViceDaemon:
         # Tag clip filenames with the focused game (curated list, same
         # detection as Discord Rich Presence); also feeds the auto playlists.
         recorder.clip_tag_cb = self._clip_game_tag
+        recorder.display_override = self._display_override
 
     async def _restart_recorder_for_config(self) -> bool:
         """Restart recorder without running two capture processes at once."""
@@ -431,22 +442,106 @@ class ViceDaemon:
         self._pending_recording_apply = False
         return True
 
+    # ── follow-the-pointer capture (#133) ─────────────────────────────────────
+    # No capture backend can retarget a running replay buffer, so following the
+    # pointer means restarting the recorder. Two agreeing samples in a row are
+    # required so dragging the mouse across a screen edge does not restart
+    # anything, and the restart is skipped while a clip or session is in flight.
+
+    def _sync_follow_mouse_task(self) -> None:
+        wanted = bool(self.cfg.recording.follow_mouse_display)
+        running = self._follow_mouse_task is not None and not self._follow_mouse_task.done()
+        if wanted and not running:
+            self._follow_mouse_task = asyncio.create_task(self._follow_mouse_loop())
+        elif not wanted and running:
+            self._follow_mouse_task.cancel()
+            self._follow_mouse_task = None
+            self._display_override = None
+            self.recorder.display_override = None
+
+    async def _follow_mouse_loop(self) -> None:
+        from .active_window import pointer_display
+
+        pending: Optional[str] = None
+        try:
+            while True:
+                await asyncio.sleep(FOLLOW_MOUSE_INTERVAL)
+                if self._session_active or (self._clip_task and not self._clip_task.done()):
+                    continue
+                try:
+                    current = await asyncio.to_thread(pointer_display)
+                except Exception:
+                    log.debug("Pointer display detection failed", exc_info=True)
+                    continue
+                if not current or current == self._display_override:
+                    pending = None
+                    continue
+                if current != pending:
+                    pending = current
+                    continue
+                pending = None
+                log.info("Pointer moved to %s; retargeting capture", current)
+                previous = self._display_override
+                self._display_override = current
+                async with self._config_apply_lock:
+                    async with self._clip_lock:
+                        try:
+                            await self._restart_recorder_for_config()
+                        except Exception as exc:
+                            self._display_override = previous
+                            log.warning("Could not retarget capture to %s: %s", current, exc)
+        except asyncio.CancelledError:
+            pass
+
+    async def _hotkeys_suppressed(self) -> bool:
+        """Whether the focused app is one the user asked Vice to keep its hands
+        off (#130). Only the keyboard path checks this, so the UI's clip button
+        and the CLI stay live regardless."""
+        matches = self.cfg.hotkeys.disable_while_focused
+        if not matches:
+            return False
+        try:
+            from .active_window import get_active_window
+            win = await asyncio.to_thread(get_active_window)
+        except Exception:
+            log.debug("Focused-app check for hotkey suppression failed", exc_info=True)
+            return False
+        if not win:
+            return False
+        haystacks = ((win.get("process") or "").lower(), (win.get("class") or "").lower())
+        for needle in matches:
+            n = (needle or "").strip().lower()
+            if n and any(n in h for h in haystacks):
+                log.info("Hotkey ignored: %r is focused (matched %r)", haystacks[1] or haystacks[0], needle)
+                return True
+        return False
+
     def _bind_hotkeys(self) -> None:
         """(Re)bind runtime hotkeys from current config."""
         self.hotkeys.clear_bindings()
         for clip_key, duration in effective_clip_bindings(self.cfg):
             # Single tap → save clip (or add session highlight)
             async def _clip(duration=duration) -> None:
+                if await self._hotkeys_suppressed():
+                    return
                 await self._handle_clip_hotkey(duration)
+
+            async def _session_toggle() -> None:
+                if await self._hotkeys_suppressed():
+                    return
+                await self._handle_session_toggle()
 
             self.hotkeys.on(clip_key, _clip)
             # Double tap → toggle session recording
-            self.hotkeys.on_double(clip_key, self._handle_session_toggle)
+            self.hotkeys.on_double(clip_key, _session_toggle)
 
     async def _apply_live_config(self) -> None:
         """Apply config changes and restart recorder when recording settings changed."""
         async with self._config_apply_lock:
             self._bind_hotkeys()
+            # Before the restart check, so turning follow-the-pointer off drops
+            # the override and the recorder goes back to the saved display.
+            self._sync_follow_mouse_task()
 
             async with self._clip_lock:
                 if self._recording_signature() != self._recording_sig:
@@ -750,6 +845,12 @@ class ViceDaemon:
             self._update_task.cancel()
             try:
                 await self._update_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if self._follow_mouse_task and not self._follow_mouse_task.done():
+            self._follow_mouse_task.cancel()
+            try:
+                await self._follow_mouse_task
             except (asyncio.CancelledError, Exception):
                 pass
         if self.share:

@@ -40,7 +40,7 @@ function edRenderLibraryList() {
     let list = clips.filter(c => c.duration > 0);
     if (q) list = list.filter(c => `${c.name} ${c.game || ''}`.toLowerCase().includes(q));
     const cards = list.map(c => {
-      const slug = escAttr(c.slug);
+      const slug = escArg(c.slug);
       const media = c.thumb_url
         ? `<img src="${escAttr(c.thumb_url)}" loading="lazy" alt="" draggable="false">`
         : `<div class="ed-lib-ph">${svgEl('film', 24)}</div>`;

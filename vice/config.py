@@ -88,12 +88,19 @@ class RecordingConfig:
     fps: int = 60
     # None = backend default capture target. Otherwise a backend-specific display/output id.
     display: Optional[str] = None
+    # Retarget capture at whichever monitor the pointer is on, ignoring
+    # `display`. The capture backend cannot switch targets mid-run, so moving
+    # to another monitor restarts the recorder and its replay buffer.
+    follow_mouse_display: bool = False
     # None = auto-detect from display. E.g. "1920x1080".
     resolution: Optional[str] = None
     # "auto" | "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" | "h264_vaapi" | "hevc_vaapi" | "av1_vaapi" | "libx264" | "libx265" | "copy"
     encoder: str = "auto"
     # ffmpeg -crf equivalent; lower = better quality. Used only for libx264/libx265.
     crf: int = 23
+    # Bits per colour channel: "8" or "10". 10-bit needs an HEVC or AV1
+    # encoder; no GPU encoder does 10-bit H.264.
+    color_depth: str = "8"
     # "auto" | "gsr" | "wf-recorder" | "ffmpeg"
     backend: str = "auto"
     # Include desktop audio in clips.
@@ -156,6 +163,10 @@ class HotkeyConfig:
     toggle: Optional[str] = None
     # Additional clip hotkeys with their own durations.
     clip_presets: list[HotkeyClipPreset] = field(default_factory=list)
+    # Ignore Vice's hotkeys while one of these apps is focused, for games that
+    # clip on the same keys themselves. Substrings matched case-insensitively
+    # against the focused window's process name and class, e.g. ["mygame.exe"].
+    disable_while_focused: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -300,6 +311,18 @@ def normalize_clip_presets(raw, *, strict: bool = False) -> list[HotkeyClipPrese
     return presets
 
 
+def normalize_focus_blocklist(raw) -> list[str]:
+    """Trimmed, de-duplicated app matches for hotkeys.disable_while_focused."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        value = str(item or "").strip()
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
 def validate_hotkeys(hotkeys: HotkeyConfig) -> None:
     seen: set[str] = set()
     primary = normalize_combo((hotkeys.clip or "").strip())
@@ -373,6 +396,12 @@ def clamp_recording_limits(cfg: Config) -> None:
         storage = "auto"
     rc.gsr_replay_storage = storage
 
+    depth = str(getattr(rc, "color_depth", "") or "8").strip()
+    if depth not in {"8", "10"}:
+        log.warning("recording.color_depth=%r is unknown — using 8", depth)
+        depth = "8"
+    rc.color_depth = depth
+
     for name in ("desktop_volume", "microphone_volume"):
         try:
             volume = float(getattr(rc, name, 1.0))
@@ -437,6 +466,9 @@ def load() -> Config:
     hotkeys_raw["clip_presets"] = normalize_clip_presets(
         hotkeys_raw.get("clip_presets", []),
         strict=False,
+    )
+    hotkeys_raw["disable_while_focused"] = normalize_focus_blocklist(
+        hotkeys_raw.get("disable_while_focused")
     )
 
     cfg = Config(

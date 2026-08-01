@@ -25,6 +25,11 @@ function toTC(s) {
 function pad(n) { return String(n).padStart(2,'0'); }
 function escAttr(s) { return String(s).replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;'); }
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// For a value going into a single-quoted JS string inside an inline handler
+// attribute. escAttr alone is not enough: the parser decodes &#39; back to an
+// apostrophe before the JS is parsed, so a clip named "Bob's clip" closed the
+// string and killed every handler on the card (#138). Escape for JS first.
+function escArg(s) { return escAttr(String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")); }
 function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
 
 // Forward a debug message to both the browser console and (in native mode)

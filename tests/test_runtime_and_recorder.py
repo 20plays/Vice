@@ -31,8 +31,10 @@ from vice.recorder import (
     list_gsr_audio_sources,
     _wait_for_finalized_clip,
     _encoder_flags,
+    _gsr_codec_for_encoder,
     _next_clip_path,
     _render_clip_name,
+    slugify_clip_name,
 )
 from vice.runtime import (
     _wayland_runtime_dir_candidates,
@@ -640,6 +642,7 @@ class _FakeRecorder:
         self.stop_calls = 0
         self.start_error: Exception | None = None
         self.output = ""
+        self.display_override: str | None = None
 
     def on_clip_saved(self, cb) -> None:
         self._cb = cb
@@ -740,6 +743,80 @@ class ViceDaemonClipFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(daemon.recorder, second)
         self.assertEqual(second._cb, daemon._on_clip_saved)
         self.assertEqual(second.clip_tag_cb, daemon._clip_game_tag)
+
+    async def _follow_mouse_daemon(self, samples: list) -> tuple:
+        """Daemon with follow-the-pointer on and a scripted pointer sequence."""
+        cfg = Config(recording=RecordingConfig(display="DP-1", follow_mouse_display=True))
+        with mock.patch("vice.main.load_config", return_value=cfg), \
+             mock.patch("vice.main.create_recorder", return_value=_FakeRecorder()), \
+             mock.patch("vice.main.HotkeyListener", return_value=_FakeHotkeys()), \
+             mock.patch("vice.main.can_access_hotkeys", return_value=True):
+            daemon = main_mod.ViceDaemon()
+
+        restarts: list = []
+
+        async def fake_restart() -> bool:
+            restarts.append(daemon._display_override)
+            return True
+
+        daemon._restart_recorder_for_config = fake_restart  # type: ignore[method-assign]
+        readings = iter(samples)
+
+        def next_reading():
+            try:
+                return next(readings)
+            except StopIteration:
+                raise asyncio.CancelledError
+
+        with mock.patch("vice.main.FOLLOW_MOUSE_INTERVAL", 0), \
+             mock.patch("vice.active_window.pointer_display", side_effect=next_reading):
+            task = asyncio.create_task(daemon._follow_mouse_loop())
+            await asyncio.wait_for(task, timeout=5)
+        return daemon, restarts
+
+    async def test_pointer_retargets_capture_after_two_agreeing_samples(self) -> None:
+        daemon, restarts = await self._follow_mouse_daemon(
+            ["HDMI-A-1", "HDMI-A-1", "HDMI-A-1"]
+        )
+
+        self.assertEqual(restarts, ["HDMI-A-1"])
+        self.assertEqual(daemon._display_override, "HDMI-A-1")
+
+    async def test_a_single_stray_sample_does_not_restart_the_recorder(self) -> None:
+        """Dragging the pointer across a screen edge must not cost the buffer."""
+        _, restarts = await self._follow_mouse_daemon(
+            ["HDMI-A-1", "DP-2", "HDMI-A-1", "DP-2"]
+        )
+
+        self.assertEqual(restarts, [])
+
+    async def test_undetectable_pointer_leaves_capture_alone(self) -> None:
+        _, restarts = await self._follow_mouse_daemon([None, None, None])
+
+        self.assertEqual(restarts, [])
+
+    async def test_follow_mouse_task_starts_and_stops_with_the_setting(self) -> None:
+        cfg = Config(recording=RecordingConfig(follow_mouse_display=True))
+        recorder = _FakeRecorder()
+        with mock.patch("vice.main.load_config", return_value=cfg), \
+             mock.patch("vice.main.create_recorder", return_value=recorder), \
+             mock.patch("vice.main.HotkeyListener", return_value=_FakeHotkeys()), \
+             mock.patch("vice.main.can_access_hotkeys", return_value=True):
+            daemon = main_mod.ViceDaemon()
+
+        daemon._sync_follow_mouse_task()
+        self.assertIsNotNone(daemon._follow_mouse_task)
+
+        # Turning it off has to drop the override too, or the recorder keeps
+        # capturing the last monitor the pointer visited.
+        daemon._display_override = "HDMI-A-1"
+        daemon.cfg.recording.follow_mouse_display = False
+        daemon._sync_follow_mouse_task()
+        await asyncio.sleep(0)
+
+        self.assertIsNone(daemon._follow_mouse_task)
+        self.assertIsNone(daemon._display_override)
+        self.assertIsNone(recorder.display_override)
 
     async def test_bind_hotkeys_registers_primary_and_preset_keys(self) -> None:
         hotkeys = _FakeHotkeys()
@@ -2301,6 +2378,98 @@ class VolumeBalanceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(cfg.recording.desktop_volume, 2.0)
         self.assertEqual(cfg.recording.microphone_volume, 0.0)
+
+
+class ClipSlugTests(unittest.TestCase):
+    """#138: a clip name the user types has to survive the filesystem, the
+    share URL and the inline handlers in the clip grid."""
+
+    def test_spaces_become_dashes_and_case_survives(self) -> None:
+        self.assertEqual(slugify_clip_name("Insane wallbang"), "Insane-wallbang")
+        self.assertEqual(slugify_clip_name("why did   this? #2"), "why-did-this-2")
+
+    def test_apostrophes_and_url_punctuation_are_dropped(self) -> None:
+        # The reported break: an apostrophe closed the JS string in every
+        # inline handler on the card.
+        self.assertEqual(slugify_clip_name("Bob's clip"), "Bobs-clip")
+        self.assertEqual(slugify_clip_name("100% ownage!"), "100-ownage")
+        self.assertEqual(slugify_clip_name("a&b?c#d"), "abcd")
+
+    def test_extension_and_separators_are_stripped(self) -> None:
+        self.assertEqual(slugify_clip_name("clip.mp4"), "clip")
+        self.assertEqual(slugify_clip_name("clip.MKV"), "clip")
+        self.assertEqual(slugify_clip_name("../../evil"), "evil")
+
+    def test_nothing_usable_returns_none(self) -> None:
+        self.assertIsNone(slugify_clip_name("   "))
+        self.assertIsNone(slugify_clip_name("..."))
+        self.assertIsNone(slugify_clip_name("???"))
+
+    def test_existing_clip_names_are_left_alone(self) -> None:
+        self.assertEqual(
+            slugify_clip_name("Vice_Clip_4_Overwatch-2"), "Vice_Clip_4_Overwatch-2"
+        )
+
+
+class ColorDepthTests(unittest.TestCase):
+    """#131: 10-bit capture, which only HEVC and AV1 can actually do."""
+
+    def test_gsr_codec_gains_the_10bit_variant(self) -> None:
+        self.assertEqual(_gsr_codec_for_encoder("hevc_nvenc", "10"), "hevc_10bit")
+        self.assertEqual(_gsr_codec_for_encoder("av1_vaapi", "10"), "av1_10bit")
+
+    def test_gsr_falls_back_to_hevc_when_the_encoder_cannot_do_10bit(self) -> None:
+        # No GPU encoder does 10-bit H.264, so asking for it must not silently
+        # produce an 8-bit clip under a 10-bit setting.
+        self.assertEqual(_gsr_codec_for_encoder("h264_nvenc", "10"), "hevc_10bit")
+        self.assertEqual(_gsr_codec_for_encoder("auto", "10"), "hevc_10bit")
+
+    def test_8bit_keeps_the_previous_mapping(self) -> None:
+        self.assertIsNone(_gsr_codec_for_encoder("auto"))
+        self.assertEqual(_gsr_codec_for_encoder("h264_nvenc"), "h264")
+        self.assertEqual(_gsr_codec_for_encoder("av1_nvenc"), "av1")
+
+    def test_gsr_command_carries_the_10bit_codec(self) -> None:
+        cfg = Config(recording=RecordingConfig(encoder="hevc_nvenc", color_depth="10"))
+        cmd = GSRRecorder(cfg)._build_cmd()
+
+        self.assertIn("-k", cmd)
+        self.assertEqual(cmd[cmd.index("-k") + 1], "hevc_10bit")
+
+    def test_ffmpeg_pixel_format_follows_the_setting(self) -> None:
+        self.assertIn("p010le", _encoder_flags("hevc_nvenc", 23, "10"))
+        self.assertIn("yuv420p10le", _encoder_flags("libx265", 23, "10"))
+        self.assertIn("format=p010,hwupload", _encoder_flags("hevc_vaapi", 23, "10"))
+        # Software and hardware H.264 have no 10-bit path here.
+        self.assertNotIn("yuv420p10le", _encoder_flags("libx264", 23, "10"))
+        self.assertNotIn("p010le", _encoder_flags("h264_nvenc", 23, "10"))
+
+
+class FollowMouseDisplayTests(unittest.TestCase):
+    """#133: capture whichever monitor the pointer is on."""
+
+    def test_override_beats_the_saved_display(self) -> None:
+        cfg = Config(recording=RecordingConfig(display="DP-1"))
+        recorder = GSRRecorder(cfg)
+        recorder.display_override = "HDMI-A-1"
+
+        with mock.patch(
+            "vice.recorder._display_options",
+            return_value=[{"id": "DP-1", "label": "DP-1"}, {"id": "HDMI-A-1", "label": "HDMI-A-1"}],
+        ):
+            cmd = recorder._build_cmd()
+
+        self.assertEqual(cmd[cmd.index("-w") + 1], "HDMI-A-1")
+
+    def test_no_override_keeps_the_saved_display(self) -> None:
+        cfg = Config(recording=RecordingConfig(display="DP-1"))
+        with mock.patch(
+            "vice.recorder._display_options",
+            return_value=[{"id": "DP-1", "label": "DP-1"}],
+        ):
+            cmd = GSRRecorder(cfg)._build_cmd()
+
+        self.assertEqual(cmd[cmd.index("-w") + 1], "DP-1")
 
 
 class ClipNameTemplateTests(unittest.TestCase):

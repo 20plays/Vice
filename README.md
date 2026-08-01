@@ -91,7 +91,11 @@ Both paths install everything Vice needs, including the `gpu-screen-recorder` ca
 
 **Vice Sessions.** Double-tap your clip key to start recording a full match. Single-tap during the session to drop a marker at that moment, then pick up right where you left off once it lands in the editor.
 
-**Tune it to taste.** Custom `gpu-screen-recorder` flags and arguments, color themes, and fully rebindable hotkeys, all from Settings.
+**Clips the screen you're on.** Turn on Follow my mouse and Vice records whichever monitor the pointer is sitting on, instead of one you picked in advance. Works on X11, Hyprland and Sway.
+
+**Stays out of the way.** List the apps that clip on their own keys and Vice ignores its hotkeys while they are focused.
+
+**Tune it to taste.** Custom `gpu-screen-recorder` flags and arguments, 8-bit or 10-bit colour, color themes, and fully rebindable hotkeys, all from Settings.
 
 ## Using Vice
 
@@ -165,7 +169,9 @@ buffer_duration = 120     # seconds kept in the rolling buffer
 clip_duration   = 20      # seconds saved per clip
 fps             = 60
 display         = "DP-1"  # optional; omit to use the backend default display
+follow_mouse_display = false # record whichever monitor the pointer is on, ignoring `display`
 encoder         = "auto"  # auto | h264_nvenc | hevc_nvenc | h264_vaapi | hevc_vaapi | libx264 | libx265
+color_depth     = "8"     # 8 | 10 (10-bit needs an HEVC or AV1 encoder)
 backend         = "auto"  # auto | gsr | wf-recorder | ffmpeg
 container       = "mp4"   # mp4 | mkv (mkv is crash-safe; Discord embeds need mp4)
 capture_audio   = true
@@ -178,6 +184,7 @@ gsr_args        = ""      # extra gpu-screen-recorder flags, e.g. "-k hevc -bm c
 
 [hotkeys]
 clip = "KEY_F9"
+disable_while_focused = []  # e.g. ["ggst.exe"] to leave the keys to a game that clips itself
 
 [[hotkeys.clip_presets]]
 key = "KEY_F6"

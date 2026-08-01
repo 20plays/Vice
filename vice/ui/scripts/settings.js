@@ -55,7 +55,9 @@ function syncFormFromCfg() {
   pick('s-replay-storage', r.gsr_replay_storage ?? 'auto');
   updateBufferNote();
   pick('s-enc', r.encoder ?? 'auto');
+  pick('s-depth', r.color_depth ?? '8');
   pick('s-backend', r.backend ?? 'auto');
+  document.getElementById('s-follow-mouse').checked = !!r.follow_mouse_display;
   document.getElementById('s-audio').checked = r.capture_audio !== false;
   pick('s-gsr-audio', r.gsr_audio_source ?? 'default_output');
   pick('s-mic-source', r.microphone_source ?? 'default_input');
@@ -72,6 +74,7 @@ function syncFormFromCfg() {
   document.getElementById('s-key').value = clipKey;
   document.getElementById('s-key-btn').textContent = clipKey;
   renderClipPresetRows(h.clip_presets || []);
+  document.getElementById('s-hotkey-blocklist').value = (Array.isArray(h.disable_while_focused) ? h.disable_while_focused : []).join('\n');
   document.getElementById('s-dir').value  = o.directory  ?? '';
   document.getElementById('s-tag-game').checked = o.tag_clips_with_game !== false;
   document.getElementById('s-auto-playlist').checked = o.auto_playlist_by_game !== false;
@@ -307,7 +310,27 @@ async function refreshDisplayOptions(backend = selectedBackend(), selectedDispla
     displayInfo = { backend: backend || 'auto', displays: [], warning: 'Could not load display options.' };
   }
   renderDisplayOptions(displayInfo, selectedDisplay);
+  onFollowMouseChange();
 }
+
+// The display picker and follow-the-pointer are alternatives, so only one of
+// them is live at a time.
+function onFollowMouseChange() {
+  const toggle = document.getElementById('s-follow-mouse');
+  const note = document.getElementById('s-follow-mouse-note');
+  if (!toggle) return;
+  const supported = displayInfo?.follow_mouse_supported !== false;
+  toggle.disabled = !supported;
+  if (!supported) toggle.checked = false;
+  const display = document.getElementById('s-display');
+  if (display) display.disabled = toggle.checked;
+  if (!note) return;
+  note.textContent = supported
+    ? 'Record whichever monitor the pointer is on. Switching monitors restarts the buffer, so a clip taken right after moving will be short.'
+    : 'Needs X11, Hyprland or Sway. Vice cannot tell where the pointer is on this session.';
+  note.style.color = supported ? 'var(--text-dim)' : '#fcd34d';
+}
+
 async function onBackendChange() {
   const preferred = document.getElementById('s-display')?.value || cfg.recording?.display || null;
   await refreshDisplayOptions(selectedBackend(), preferred);
@@ -570,9 +593,11 @@ async function saveSettings() {
       clip_duration:   +document.getElementById('s-dur').value,
       fps:             +document.getElementById('s-fps').value,
       display:         document.getElementById('s-display').value || null,
+      follow_mouse_display: document.getElementById('s-follow-mouse').checked,
       resolution:      resolution,
       container:       document.getElementById('s-container').value,
       encoder:         document.getElementById('s-enc').value,
+      color_depth:     document.getElementById('s-depth').value,
       backend:         document.getElementById('s-backend').value,
       capture_audio:   document.getElementById('s-audio').checked,
       gsr_replay_storage: document.getElementById('s-replay-storage').value,
@@ -589,6 +614,8 @@ async function saveSettings() {
     hotkeys: {
       clip: document.getElementById('s-key').value,
       clip_presets: clipPresets,
+      disable_while_focused: document.getElementById('s-hotkey-blocklist').value
+        .split('\n').map(s => s.trim()).filter(Boolean),
     },
     output:  {
       directory: document.getElementById('s-dir').value,

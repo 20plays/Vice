@@ -478,3 +478,103 @@ class CandidateWindowScanTests(unittest.TestCase):
 
         with mock.patch.object(aw, "_ADAPTER", aw._get_active_window_hyprland):
             self.assertEqual(aw.list_candidate_windows(), [])
+
+
+class PointerDisplayTests(unittest.TestCase):
+    """#133: which monitor the pointer is on, named the way the capture
+    backends name it."""
+
+    HYPR_MONITORS = json.dumps([
+        {"name": "DP-1", "x": 0, "y": 0, "width": 2560, "height": 1440, "scale": 1.0,
+         "focused": False},
+        {"name": "HDMI-A-1", "x": 2560, "y": 0, "width": 1920, "height": 1080,
+         "scale": 1.0, "focused": True},
+    ])
+
+    def test_hyprland_maps_the_cursor_to_its_monitor(self) -> None:
+        from vice import active_window as aw
+
+        def fake_run(cmd, timeout=1.0):
+            if cmd[1] == "monitors":
+                return self.HYPR_MONITORS
+            return json.dumps({"x": 3000, "y": 500})
+
+        with mock.patch.object(aw, "_run", side_effect=fake_run):
+            self.assertEqual(aw._pointer_display_hyprland(), "HDMI-A-1")
+
+    def test_hyprland_divides_by_scale(self) -> None:
+        """Monitor width/height are the raw mode; the cursor is in logical
+        coordinates, so a 2x monitor is half as wide as it reports."""
+        from vice import active_window as aw
+
+        monitors = json.dumps([
+            {"name": "DP-1", "x": 0, "y": 0, "width": 3840, "height": 2160,
+             "scale": 2.0, "focused": True},
+            {"name": "DP-2", "x": 1920, "y": 0, "width": 1920, "height": 1080,
+             "scale": 1.0, "focused": False},
+        ])
+
+        def fake_run(cmd, timeout=1.0):
+            return monitors if cmd[1] == "monitors" else json.dumps({"x": 2500, "y": 100})
+
+        with mock.patch.object(aw, "_run", side_effect=fake_run):
+            self.assertEqual(aw._pointer_display_hyprland(), "DP-2")
+
+    def test_hyprland_falls_back_to_the_focused_monitor(self) -> None:
+        from vice import active_window as aw
+
+        def fake_run(cmd, timeout=1.0):
+            return self.HYPR_MONITORS if cmd[1] == "monitors" else ""
+
+        with mock.patch.object(aw, "_run", side_effect=fake_run):
+            self.assertEqual(aw._pointer_display_hyprland(), "HDMI-A-1")
+
+    def test_sway_uses_the_focused_output(self) -> None:
+        from vice import active_window as aw
+
+        outputs = json.dumps([
+            {"name": "DP-1", "focused": False},
+            {"name": "eDP-1", "focused": True},
+        ])
+        with mock.patch.object(aw, "_run", return_value=outputs):
+            self.assertEqual(aw._pointer_display_sway(), "eDP-1")
+
+    def test_x11_maps_the_pointer_through_xrandr_geometry(self) -> None:
+        from vice import active_window as aw
+
+        listing = (
+            "Monitors: 2\n"
+            " 0: +*DP-1 2560/600x1440/340+0+0  DP-1\n"
+            " 1: +HDMI-A-1 1920/520x1080/290+2560+0  HDMI-A-1\n"
+        )
+
+        def fake_run(cmd, timeout=1.0):
+            if cmd[0] == "xdotool":
+                return "X=2600\nY=300\nSCREEN=0\nWINDOW=12\n"
+            return listing
+
+        with mock.patch.object(aw, "_run", side_effect=fake_run):
+            self.assertEqual(aw._pointer_display_x11(), "HDMI-A-1")
+
+    def test_pointer_outside_every_monitor_is_unknown(self) -> None:
+        from vice import active_window as aw
+
+        rects = aw._parse_xrandr_monitor_rects(" 0: +*DP-1 2560/600x1440/340+0+0  DP-1\n")
+        self.assertEqual(rects, [{"name": "DP-1", "x": 0, "y": 0, "w": 2560, "h": 1440}])
+        self.assertIsNone(aw._monitor_at((5000, 100), rects))
+
+    def test_unsupported_session_reports_no_pointer_display(self) -> None:
+        from vice import active_window as aw
+
+        with mock.patch.object(aw, "_ADAPTER", None):
+            self.assertFalse(aw.pointer_display_supported())
+            self.assertIsNone(aw.pointer_display())
+
+    def test_xwayland_does_not_count_as_x11_here(self) -> None:
+        # The X pointer only tracks the real one over X surfaces, so KDE/GNOME
+        # Wayland must not claim support just because XWayland is up.
+        from vice import active_window as aw
+
+        with mock.patch.object(aw, "_ADAPTER", aw._get_active_window_x11), \
+             mock.patch.dict(os.environ, {"WAYLAND_DISPLAY": "wayland-0"}):
+            self.assertFalse(aw.pointer_display_supported())
