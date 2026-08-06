@@ -21,15 +21,46 @@ async function fetchClips() {
 }
 
 let activePreviewVideo = null;
+
+// A <video> holds its decoded buffer for as long as a source is attached, and
+// an element that carries src from the moment the card is built gets a media
+// player whether or not it is ever hovered. Cards are therefore built with the
+// URL parked in data-src; it becomes src on hover and is dropped again once
+// the pointer has been gone a moment. Waiting instead of releasing on the spot
+// means sweeping the pointer across the grid, or coming straight back to the
+// card you just left, does not pay to attach twice.
+const PREVIEW_RELEASE_MS = 4000;
+
+function previewAttach(vid) {
+  clearTimeout(vid._releaseTimer);
+  vid._releaseTimer = null;
+  if (!vid.getAttribute('src') && vid.dataset.src) vid.src = vid.dataset.src;
+}
+
+function previewRelease(vid) {
+  clearTimeout(vid._releaseTimer);
+  vid._releaseTimer = setTimeout(() => {
+    vid._releaseTimer = null;
+    if (activePreviewVideo === vid || !vid.getAttribute('src')) return;
+    vid.removeAttribute('src');
+    // Dropping the attribute alone leaves the buffer where it is; load() is
+    // what tears the player down. The failure handlers below only act on an
+    // element that still has a src, so this never reads as a decode error.
+    try { vid.load(); } catch (_) {}
+  }, PREVIEW_RELEASE_MS);
+}
+
 function stopActivePreview(resetTime = true) {
   if (!activePreviewVideo) return;
+  const vid = activePreviewVideo;
   try {
-    activePreviewVideo.pause();
-    if (resetTime) activePreviewVideo.currentTime = 0;
+    vid.pause();
+    if (resetTime) vid.currentTime = 0;
   } catch (_) {}
-  const card = activePreviewVideo.closest('.clip-card');
+  const card = vid.closest('.clip-card');
   if (card) card.classList.remove('preview-on');
   activePreviewVideo = null;
+  previewRelease(vid);
 }
 // Hover previews resolve from the hovered element, not the slug: card ids
 // are duplicated across the grid and both home rows, so an id lookup could
@@ -41,6 +72,7 @@ function startPreview(el) {
   if (activePreviewVideo && activePreviewVideo !== vid) stopActivePreview(true);
   card.classList.add('preview-on');
   activePreviewVideo = vid;
+  previewAttach(vid);
   const maybe = vid.play();
   if (maybe && typeof maybe.catch === 'function') maybe.catch(() => {});
 }
@@ -51,6 +83,7 @@ function stopPreview(el) {
   card.classList.remove('preview-on');
   try { vid.pause(); vid.currentTime = 0; } catch (_) {}
   if (activePreviewVideo === vid) activePreviewVideo = null;
+  previewRelease(vid);
 }
 
 function currentPlaylist() {
@@ -154,7 +187,7 @@ function cardHTML(c) {
   const hoverHandlers = 'onpointerenter="startPreview(this)" onpointerleave="stopPreview(this)"';
   const mediaHtml = c.thumb_url
     ? `<img src="${escAttr(c.thumb_url)}" loading="lazy" alt="" draggable="false">
-       <video class="preview-video" src="${escAttr(c.video_url)}" muted loop playsinline preload="none"></video>`
+       <video class="preview-video" data-src="${escAttr(c.video_url)}" muted loop playsinline preload="none"></video>`
     : `<div class="thumb-placeholder">${svgEl('film', 32)}</div>`;
 
   const shareDisabled = !c.share_url;
