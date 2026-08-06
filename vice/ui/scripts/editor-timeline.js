@@ -80,7 +80,9 @@ function edItemHTML(it) {
       <div class="ed-handle r" data-handle="r"><div class="ed-handle-bar"></div></div>
     </div>`;
   }
-  const thumb = c && c.thumb_url ? `<img src="${escAttr(c.thumb_url)}" alt="" draggable="false">` : '';
+  // Lazy like the library list: a long timeline scrolls well past its own
+  // width, and a thumb costs about 900 KB once decoded.
+  const thumb = c && c.thumb_url ? `<img src="${escAttr(c.thumb_url)}" loading="lazy" alt="" draggable="false">` : '';
   return `<div class="ed-item ed-item-clip${sel}${miss}" ${base}>
     ${thumb}<div class="ed-item-shade"></div>
     <div class="ed-item-hd">
