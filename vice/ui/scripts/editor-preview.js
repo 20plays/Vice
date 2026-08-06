@@ -79,6 +79,37 @@ function edInitStage() {
 // ═══════════════════════════════════════════════════════════════════
 // Video pool
 // ═══════════════════════════════════════════════════════════════════
+
+// Detaching an element does not free what it decoded — the source has to go
+// first, and load() is what actually tears the player down.
+function edDropVideo(v) {
+  v.pause();
+  v.removeAttribute('src');
+  v._key = null;
+  try { v.load(); } catch (_) {}
+  v.remove();
+}
+
+// Three elements per video track, each holding a clip it has decoded, is a
+// reasonable thing to keep while the editor is on screen and a poor thing to
+// keep for the rest of the session once it is not. Called on the way out; the
+// pool rebuilds itself on the next edRenderPreviewFrame.
+function edReleasePool() {
+  Object.keys(edPool).forEach(tid => {
+    edPool[tid].els.forEach(edDropVideo);
+    delete edPool[tid];
+  });
+  edPoolKey = '';
+  edMaster = null;
+  Object.keys(edAudioPool).forEach(id => {
+    const a = edAudioPool[id];
+    a.pause();
+    a.removeAttribute('src');
+    try { a.load(); } catch (_) {}
+    delete edAudioPool[id];
+  });
+}
+
 function edSyncPool() {
   const stage = document.getElementById('ed-stage');
   const vts = edVideoTracks();
@@ -88,7 +119,7 @@ function edSyncPool() {
 
   Object.keys(edPool).forEach(tid => {
     if (!vts.find(t => t.id === tid)) {
-      edPool[tid].els.forEach(v => { v.pause(); v.remove(); });
+      edPool[tid].els.forEach(edDropVideo);
       delete edPool[tid];
     }
   });
