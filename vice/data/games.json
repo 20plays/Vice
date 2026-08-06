@@ -309,6 +309,7 @@
   {"name": "Timberborn", "matches": ["Timberborn.exe", "timberborn", "steam_app_1062090"]},
   {"name": "Titanfall 2", "matches": ["Titanfall2.exe", "titanfall2", "steam_app_1237970"]},
   {"name": "Trackmania", "matches": ["Trackmania.exe", "trackmania", "steam_app_2225070"]},
+  {"name": "Trailmakers", "matches": ["Trailmakers.exe", "steam_app_585420"]},
   {"name": "Two Point Museum", "matches": ["TwoPointMuseum.exe", "twopointmuseum", "steam_app_2185060"]},
   {"name": "Ultrakill", "matches": ["ULTRAKILL.exe", "ultrakill", "steam_app_1229490"]},
   {"name": "Under Night In-Birth II", "matches": ["UNI2.exe", "undernightinbirthii", "steam_app_2076010"]},
