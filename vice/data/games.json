@@ -292,6 +292,7 @@
   {"name": "Star Wars Battlefront II", "matches": ["starwarsbattlefrontii.exe", "starwarsbattlefrontii", "steam_app_1237950"]},
   {"name": "Star Wars: The Old Republic", "matches": ["swtor.exe", "starwarstheoldrepublic", "steam_app_1286830"]},
   {"name": "StarCraft II", "matches": ["SC2_x64.exe", "SC2.exe", "starcraft ii"]},
+  {"name": "Star Citizen", "matches": ["StarCitizen.exe"]},
   {"name": "Stellar Blade", "matches": ["SB-Win64-Shipping.exe", "stellarblade", "steam_app_3489700"]},
   {"name": "Stray", "matches": ["Stray-Win64-Shipping.exe", "steam_app_1332010"]},
   {"name": "Street Fighter V", "matches": ["StreetFighterV.exe", "streetfighterv", "steam_app_310950"]},
