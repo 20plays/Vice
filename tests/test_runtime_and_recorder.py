@@ -1143,6 +1143,18 @@ class ClipNamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(untagged.name, "Vice_Clip_3.mp4")
         self.assertEqual(tagged.name, "Vice_Clip_3_Deep-Rock-Galactic.mkv")
 
+    def test_next_session_path_uses_configured_container(self) -> None:
+        from vice.recorder import _next_session_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+
+            default = _next_session_path(out)
+            mkv = _next_session_path(out, ext="mkv")
+
+        self.assertEqual(default.name, "Vice_Session_1.mp4")
+        self.assertEqual(mkv.name, "Vice_Session_1.mkv")
+
     async def test_clip_tag_is_sanitized_for_filenames(self) -> None:
         recorder = GSRRecorder(
             Config(output=OutputConfig(directory="/tmp/vice-test"))
@@ -1308,6 +1320,13 @@ class RecorderAudioCommandTests(unittest.TestCase):
         cmd = GSRRecorder._gsr_session_cmd(Path("/tmp/vice-test/out.mp4"), rc)
 
         self.assertEqual(cmd[cmd.index("-s") + 1], "1920x1080")
+
+    def test_gsr_session_cmd_uses_configured_container(self) -> None:
+        rc = RecordingConfig(container="mkv")
+
+        cmd = GSRRecorder._gsr_session_cmd(Path("/tmp/vice-test/out.mkv"), rc)
+
+        self.assertEqual(cmd[cmd.index("-c") + 1], "mkv")
 
     def test_gsr_build_cmd_uses_configured_container(self) -> None:
         recorder = GSRRecorder(
