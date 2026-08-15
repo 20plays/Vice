@@ -464,6 +464,31 @@ _EMBED_PAGE = """\
 """
 
 
+# cloudflared prints its own infrastructure hostnames alongside the tunnel
+# address. api.trycloudflare.com winning the match meant every share link
+# pointed at Cloudflare's API, which answers "Method Not Allowed" (#143).
+_TRYCLOUDFLARE_RE = re.compile(r"https://([a-zA-Z0-9-]+)\.trycloudflare\.com")
+_NOT_A_TUNNEL = {"api", "www", "dash", "developers", "blog"}
+
+
+def _quick_tunnel_url(line: str) -> Optional[str]:
+    """The quick-tunnel address in a line of cloudflared output, or None.
+
+    Quick tunnels get multi-word hyphenated subdomains, so a hyphenless host
+    is ranked last rather than rejected: a naming change at Cloudflare should
+    cost a worse guess, not a broken feature.
+    """
+    fallback: Optional[str] = None
+    for match in _TRYCLOUDFLARE_RE.finditer(line):
+        if match.group(1).lower() in _NOT_A_TUNNEL:
+            continue
+        if "-" in match.group(1):
+            return match.group(0)
+        if fallback is None:
+            fallback = match.group(0)
+    return fallback
+
+
 # ── share server ─────────────────────────────────────────────────────────────
 
 class ShareServer:
@@ -1448,6 +1473,7 @@ class ShareServer:
         from .config import (
             Config, RecordingConfig, HotkeyConfig, OutputConfig, SharingConfig,
             DiscordConfig, DiscordCustomGame, UpdatesConfig, NotificationsConfig,
+            UIConfig,
             clamp_recording_limits, ensure_buffer_covers_clip_presets,
             normalize_clip_presets, normalize_combo, normalize_focus_blocklist,
             validate_hotkeys,
@@ -1523,6 +1549,10 @@ class ShareServer:
                 k: v for k, v in merged.get("notifications", {}).items()
                 if k in NotificationsConfig.__dataclass_fields__
             }),
+            ui=UIConfig(**{
+                k: v for k, v in merged.get("ui", {}).items()
+                if k in UIConfig.__dataclass_fields__
+            }),
         )
         try:
             validate_hotkeys(new_cfg.hotkeys)
@@ -1542,8 +1572,10 @@ class ShareServer:
             or old_cfg.recording.gsr_args != new_cfg.recording.gsr_args
         )
 
-        # Apply live (some settings still require daemon restart, e.g. recorder backend).
-        for field in ("recording", "hotkeys", "output", "sharing", "discord"):
+        # Apply live (some settings still require daemon restart, e.g. recorder
+        # backend). "ui" is only read by vice-app when the window opens, but it
+        # is carried across so self.cfg still matches what is on disk.
+        for field in ("recording", "hotkeys", "output", "sharing", "discord", "ui"):
             setattr(self.cfg, field, getattr(new_cfg, field))
 
         apply_error: str | None = None
@@ -1670,16 +1702,13 @@ class ShareServer:
         assert self._tunnel_proc and self._tunnel_proc.stdout
         proc = self._tunnel_proc
         async for raw in proc.stdout:
-            # Quick tunnels always live at <random>.trycloudflare.com. Match
-            # that exactly: cloudflared's startup banner contains other
-            # *.cloudflare.com links (docs, downloads) that must never be
-            # mistaken for the tunnel address (issue #100). Keep draining
-            # stdout after the URL so process exit is still detected.
+            # Keep draining stdout after the URL so process exit is still
+            # detected.
             if self._tunnel_url is not None:
                 continue
-            m = re.search(r"https://[a-zA-Z0-9-]+\.trycloudflare\.com", raw.decode(errors="replace"))
-            if m:
-                self._tunnel_url = m.group(0)
+            url = _quick_tunnel_url(raw.decode(errors="replace"))
+            if url:
+                self._tunnel_url = url
                 log.info("Cloudflare Tunnel URL: %s", self._tunnel_url)
                 await self.broadcast({"type": "tunnel_url", "url": self._tunnel_url})
         # stdout closed: cloudflared exited. If that happened before a URL

@@ -2372,6 +2372,99 @@ class VolumeBalanceTests(unittest.IsolatedAsyncioTestCase):
 
         probe.assert_not_called()
 
+    def test_mic_mono_downmixes_only_the_mic_track(self) -> None:
+        from vice.recorder import _volume_mix_cmd
+
+        cmd = _volume_mix_cmd(Path("/tmp/c.mp4"), Path("/tmp/c.mix.mp4"), 2, 1.0, 1.0, True)
+
+        joined = " ".join(cmd)
+        # Both channels carry the same summed signal, so a one-channel mic
+        # lands centred instead of in one ear (#146).
+        self.assertIn("[0:a:1]pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1,volume=1.0[a1]", joined)
+        self.assertIn("[0:a:0]volume=1.0[a0]", joined)
+        self.assertNotIn("[0:a:0]pan=", joined)
+
+    def test_mic_mono_off_leaves_the_graph_alone(self) -> None:
+        from vice.recorder import _volume_mix_cmd
+
+        cmd = _volume_mix_cmd(Path("/tmp/c.mp4"), Path("/tmp/c.mix.mp4"), 2, 1.0, 0.5)
+
+        self.assertNotIn("pan=", " ".join(cmd))
+
+    def test_mic_mono_alone_triggers_the_save_time_pass(self) -> None:
+        from vice.recorder import _save_audio_pass_wanted
+
+        rc = RecordingConfig(
+            capture_audio=True, capture_microphone=True, microphone_mono=True
+        )
+        self.assertTrue(_save_audio_pass_wanted(rc))
+
+        # Without mic capture there is no mic to downmix.
+        rc_no_mic = RecordingConfig(capture_audio=True, microphone_mono=True)
+        self.assertFalse(_save_audio_pass_wanted(rc_no_mic))
+
+    def test_mic_mono_splits_desktop_and_mic_into_tracks(self) -> None:
+        from vice.recorder import _gsr_audio_args
+
+        rc = RecordingConfig(
+            capture_audio=True, capture_microphone=True, microphone_mono=True
+        )
+        args = _gsr_audio_args(rc)
+
+        # Two -a flags: the pass can only touch the mic if it has its own track.
+        self.assertEqual(args, ["-a", "default_output", "-a", "default_input"])
+
+    async def test_mic_mono_not_applied_to_a_lone_desktop_track(self) -> None:
+        from vice.recorder import _apply_volume_mix
+
+        rc = RecordingConfig(
+            capture_audio=True, capture_microphone=False, microphone_mono=True
+        )
+        with mock.patch("vice.recorder._count_audio_streams") as probe:
+            await _apply_volume_mix(Path("/tmp/c.mp4"), rc)
+
+        # microphone_mono without capture_microphone is not a reason to
+        # re-encode anything.
+        probe.assert_not_called()
+
+    def test_encoder_failure_detection(self) -> None:
+        from vice.recorder import _looks_like_encoder_failure
+
+        self.assertTrue(_looks_like_encoder_failure(
+            "gsr error: Could not open video codec: Function not implemented"
+        ))
+        self.assertTrue(_looks_like_encoder_failure("failed to load libnvidia-encode.so"))
+        # A bad monitor name is not worth retrying on the CPU.
+        self.assertFalse(_looks_like_encoder_failure(
+            "gsr error: monitor DP-9 not found"
+        ))
+        self.assertFalse(_looks_like_encoder_failure(""))
+
+    def test_gsr_cmd_cpu_encoder_flag(self) -> None:
+        from vice.recorder import GSRRecorder
+
+        rec = GSRRecorder(Config(recording=RecordingConfig()))
+        self.assertNotIn("-encoder", rec._build_cmd())
+        cpu = rec._build_cmd(cpu_encoder=True)
+        self.assertIn("-encoder", cpu)
+        self.assertEqual(cpu[cpu.index("-encoder") + 1], "cpu")
+
+    def test_audio_tracks_dropped_by_desktop_toggle_are_reported(self) -> None:
+        from vice.recorder import _gsr_audio_args
+
+        rc = RecordingConfig(
+            capture_audio=False,
+            capture_microphone=True,
+            audio_tracks=["default_output", "app:Discord"],
+        )
+        with self.assertLogs("vice.recorder", level="WARNING") as logs:
+            args = _gsr_audio_args(rc)
+
+        # Only the mic survives, which looks exactly like multi-track being
+        # broken unless Vice says why (#137).
+        self.assertEqual(args, ["-a", "default_input"])
+        self.assertIn("Capture desktop audio is off", "\n".join(logs.output))
+
     def test_clamp_bounds_volumes(self) -> None:
         cfg = Config(recording=RecordingConfig(desktop_volume=9.0, microphone_volume=-1))
         config_mod.clamp_recording_limits(cfg)

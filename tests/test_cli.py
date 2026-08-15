@@ -116,6 +116,98 @@ class DoctorCommandTests(unittest.TestCase):
         self.assertIn("line two", result.output)
 
 
+class SessionWaitTests(unittest.TestCase):
+    """The service is wanted by default.target now, which the user manager can
+    reach before the compositor exports anything (#139). Waiting for that is
+    only ever right under systemd."""
+
+    def test_terminal_start_never_waits(self) -> None:
+        runner = CliRunner()
+        daemon = _FakeStartDaemon()
+
+        with mock.patch("vice.main.normalize_runtime_environment"), \
+             mock.patch("vice.main._setup_daemon_logging"), \
+             mock.patch("vice.main.runtime_env_snapshot", return_value={}), \
+             mock.patch("vice.main.running_under_systemd", return_value=False), \
+             mock.patch("vice.main.has_display", return_value=False), \
+             mock.patch("vice.main.SOCKET_FILE", Path("/tmp/vice-test-missing.sock")), \
+             mock.patch("vice.main.ViceDaemon", return_value=daemon), \
+             mock.patch("vice.main.wait_for_display") as wait_mock:
+            runner.invoke(cli, ["start", "--no-open-ui"])
+
+        wait_mock.assert_not_called()
+
+    def test_systemd_start_without_a_display_waits(self) -> None:
+        runner = CliRunner()
+        daemon = _FakeStartDaemon()
+
+        with mock.patch("vice.main.normalize_runtime_environment"), \
+             mock.patch("vice.main._setup_daemon_logging"), \
+             mock.patch("vice.main.runtime_env_snapshot", return_value={}), \
+             mock.patch("vice.main.running_under_systemd", return_value=True), \
+             mock.patch("vice.main.has_display", return_value=False), \
+             mock.patch("vice.main.SOCKET_FILE", Path("/tmp/vice-test-missing.sock")), \
+             mock.patch("vice.main.ViceDaemon", return_value=daemon), \
+             mock.patch("vice.main.wait_for_display") as wait_mock:
+            runner.invoke(cli, ["start", "--no-open-ui"])
+
+        wait_mock.assert_called_once()
+
+    def test_systemd_start_with_a_display_does_not_wait(self) -> None:
+        runner = CliRunner()
+        daemon = _FakeStartDaemon()
+
+        with mock.patch("vice.main.normalize_runtime_environment"), \
+             mock.patch("vice.main._setup_daemon_logging"), \
+             mock.patch("vice.main.runtime_env_snapshot", return_value={}), \
+             mock.patch("vice.main.running_under_systemd", return_value=True), \
+             mock.patch("vice.main.has_display", return_value=True), \
+             mock.patch("vice.main.SOCKET_FILE", Path("/tmp/vice-test-missing.sock")), \
+             mock.patch("vice.main.ViceDaemon", return_value=daemon), \
+             mock.patch("vice.main.wait_for_display") as wait_mock:
+            runner.invoke(cli, ["start", "--no-open-ui"])
+
+        wait_mock.assert_not_called()
+
+
+class ServiceFileLookupTests(unittest.TestCase):
+    """Doctor used to look only in ~/.config/systemd/user, so a package install
+    that put the unit in /usr/lib reported "(not installed)" while the service
+    sat there enabled (#139)."""
+
+    def test_finds_system_installed_unit(self) -> None:
+        from vice.main import _installed_service_file
+
+        system_path = Path("/usr/lib/systemd/user/vice.service")
+        with mock.patch.object(Path, "exists", lambda self: self == system_path):
+            self.assertEqual(_installed_service_file(), system_path)
+
+    def test_prefers_the_users_own_unit(self) -> None:
+        from vice.main import _installed_service_file
+        from vice.runtime import actual_home_dir
+
+        user_path = actual_home_dir() / ".config" / "systemd" / "user" / "vice.service"
+        with mock.patch.object(Path, "exists", lambda self: True):
+            self.assertEqual(_installed_service_file(), user_path)
+
+    def test_none_when_nothing_is_installed(self) -> None:
+        from vice.main import _installed_service_file
+
+        with mock.patch.object(Path, "exists", lambda self: False):
+            self.assertIsNone(_installed_service_file())
+
+
+class ServiceUnitTests(unittest.TestCase):
+    def test_unit_is_wanted_by_default_target(self) -> None:
+        # graphical-session.target alone left the unit enabled but never
+        # started on compositors that do not activate it (#139).
+        unit = (Path(__file__).resolve().parent.parent / "packaging" / "vice.service").read_text()
+        wanted = [l for l in unit.splitlines() if l.startswith("WantedBy=")]
+        self.assertEqual(len(wanted), 1)
+        self.assertIn("default.target", wanted[0])
+        self.assertIn("graphical-session.target", wanted[0])
+
+
 class UninstallCommandTests(unittest.TestCase):
     def test_aur_detection_checks_package_ownership_of_vice_binary(self) -> None:
         with mock.patch("vice.main.shutil.which", side_effect=["/usr/bin/pacman", "/usr/bin/vice"]):

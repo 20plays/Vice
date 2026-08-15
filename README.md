@@ -48,7 +48,10 @@
 
 ```bash
 yay -S vice-clipper     # or: paru -S vice-clipper
+systemctl --user enable --now vice.service
 ```
+
+The package ships the service but does not enable it for you, so run that second line to have clipping start at login. `./install.sh` asks and does it for you.
 
 **Ubuntu / Debian / Mint / Fedora / openSUSE / other:**
 

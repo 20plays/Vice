@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from vice import main as main_mod
-from vice.config import Config, DiscordConfig
+from vice.config import Config, DiscordConfig, DiscordCustomGame
 from vice.discord_rpc import DiscordRPC
 from vice.main import ViceDaemon
 
@@ -167,6 +167,78 @@ def _discord_daemon(*, enabled: bool = True, client_id: str | None = None) -> Vi
     daemon._discord_no_socket_logged = False
     daemon._discord_no_window_adapter_logged = False
     return daemon
+
+
+class GameMatchSpecificityTests(unittest.TestCase):
+    """Needles are substrings, so a short one can swallow a longer, more
+    specific one. Matching takes the longest needle rather than the first in
+    list order, which is what makes a Steam id safe to add when a longer id
+    starts with the same digits."""
+
+    def test_longer_steam_id_wins_over_a_prefix(self) -> None:
+        daemon = _discord_daemon()
+        # steam_app_400 is a prefix of Garry's Mod's steam_app_4000, and
+        # steam_app_220 of Kerbal's steam_app_220200.
+        for cls, want in (
+            ("steam_app_400", "Portal"),
+            ("steam_app_4000", "Garry's Mod"),
+            ("steam_app_220", "Half-Life 2"),
+            ("steam_app_220200", "Kerbal Space Program"),
+        ):
+            with self.subTest(cls=cls):
+                self.assertEqual(daemon._match_game({"process": "", "class": cls}), want)
+
+    def test_sequel_is_not_swallowed_by_its_predecessor(self) -> None:
+        daemon = _discord_daemon()
+        for proc, want in (
+            ("hades2.exe", "Hades II"),
+            ("hades.exe", "Hades"),
+            ("slaythespire2.exe", "Slay the Spire 2"),
+            ("sonsoftheforest.exe", "Sons of the Forest"),
+        ):
+            with self.subTest(proc=proc):
+                self.assertEqual(daemon._match_game({"process": proc, "class": ""}), want)
+
+    def test_generic_unreal_binary_loses_to_the_prefixed_one(self) -> None:
+        # Several games ship a *Client-Win64-Shipping.exe; the one carrying the
+        # game's own prefix is the answer.
+        daemon = _discord_daemon()
+        self.assertEqual(
+            daemon._match_game({"process": "deltaforceclient-win64-shipping.exe", "class": ""}),
+            "Delta Force",
+        )
+
+    def test_custom_games_still_beat_the_bundled_list(self) -> None:
+        # Specificity is applied within each tier, never across them: an
+        # explicit user entry outranks a longer bundled needle.
+        daemon = _discord_daemon()
+        daemon.cfg.discord.custom_games = [DiscordCustomGame(name="My Build", matches=["cs2"])]
+        self.assertEqual(
+            daemon._match_game({"process": "cs2.exe", "class": "cs2"}), "My Build"
+        )
+
+    def test_every_bundled_needle_resolves_to_its_own_game(self) -> None:
+        daemon = _discord_daemon()
+        for game in main_mod._DEFAULT_GAMES:
+            for needle in game["matches"]:
+                with self.subTest(game=game["name"], needle=needle):
+                    self.assertEqual(
+                        daemon._match_game({"process": needle.lower(), "class": ""}),
+                        game["name"],
+                    )
+
+    def test_valve_titles_are_present(self) -> None:
+        daemon = _discord_daemon()
+        for proc, want in (
+            ("hl.exe", "Half-Life"),
+            ("hl_linux", "Half-Life"),
+            ("hl2.exe", "Half-Life 2"),
+            ("bms.exe", "Black Mesa"),
+            ("portal.exe", "Portal"),
+            ("portal2.exe", "Portal 2"),
+        ):
+            with self.subTest(proc=proc):
+                self.assertEqual(daemon._match_game({"process": proc, "class": ""}), want)
 
 
 class DiscordGameDatabaseTests(unittest.TestCase):

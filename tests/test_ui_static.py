@@ -127,6 +127,32 @@ class UIStaticCopyTests(unittest.TestCase):
         # The picker and follow-the-pointer are alternatives, not both at once.
         self.assertIn("display.disabled = toggle.checked", settings_js)
 
+    def test_mono_microphone_setting_is_wired(self) -> None:
+        self.assertIn('id="s-mic-mono"', self.index)
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        self.assertIn("microphone_mono", settings_js)
+
+    def test_hardware_video_decode_setting_is_wired(self) -> None:
+        self.assertIn('id="s-hw-decode"', self.index)
+        settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()
+        self.assertIn("hardware_video_decode", settings_js)
+        # It lives in its own config section, not under recording.
+        self.assertIn("ui: {", settings_js)
+
+    def test_recorder_failure_banner_is_wired(self) -> None:
+        # The daemon stays up when capture will not start, so the window has to
+        # be able to say why (#156).
+        self.assertIn('id="recorder-banner"', self.index)
+        self.assertIn('id="recorder-banner-detail"', self.index)
+        self.assertIn('id="cpu-fallback-banner"', self.index)
+        status_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "status.js").read_text()
+        ws_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "ws.js").read_text()
+        self.assertIn("function applyRecorderState", status_js)
+        self.assertIn("recorder_error", status_js)
+        # Both the poll and the live push have to drive it.
+        self.assertIn("applyRecorderState(d)", status_js)
+        self.assertIn("applyRecorderState(msg)", ws_js)
+
     def test_hotkey_blocklist_setting_is_wired(self) -> None:
         self.assertIn('id="s-hotkey-blocklist"', self.index)
         settings_js = (REPO_ROOT / "vice" / "ui" / "scripts" / "settings.js").read_text()

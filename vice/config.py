@@ -115,6 +115,11 @@ class RecordingConfig:
     # "default_input" follows the system default; "device:<name>" pins a
     # specific input (same ids as gsr_audio_source).
     microphone_source: str = "default_input"
+    # Downmix the microphone to the centre when clips are saved. XLR and other
+    # single-channel interfaces present as stereo with signal on one channel
+    # only, which puts your voice in one ear (#146). Ignored when separate
+    # audio_tracks are set, and needs capture_microphone on.
+    microphone_mono: bool = False
     # How to handle mic capture when wf-recorder cannot combine desktop + mic.
     # "prompt" | "backend_fallback" | "mic_only"
     wf_microphone_strategy: str = "prompt"
@@ -239,6 +244,16 @@ class NotificationsConfig:
 
 
 @dataclass
+class UIConfig:
+    # Let Chromium decode clip previews on the GPU. Off by default: hardware
+    # decode draws a black rectangle on a lot of Linux GPU and driver
+    # combinations, and a laggy preview beats no picture (#140). Worth turning
+    # on for high-resolution AV1 or HEVC clips that the CPU cannot keep up
+    # with. Takes effect the next time the Vice window opens.
+    hardware_video_decode: bool = False
+
+
+@dataclass
 class Config:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     hotkeys: HotkeyConfig = field(default_factory=HotkeyConfig)
@@ -247,6 +262,7 @@ class Config:
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     updates: UpdatesConfig = field(default_factory=UpdatesConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    ui: UIConfig = field(default_factory=UIConfig)
 
 
 def _merge(defaults: dict, overrides: dict) -> dict:
@@ -481,6 +497,7 @@ def load() -> Config:
         notifications=NotificationsConfig(
             **_known_keys(NotificationsConfig, merged.get("notifications", {}))
         ),
+        ui=UIConfig(**_known_keys(UIConfig, merged.get("ui", {}))),
     )
     ensure_buffer_covers_clip_presets(cfg)
     clamp_recording_limits(cfg)

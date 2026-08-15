@@ -726,10 +726,13 @@ class AutoPlaylistToggleTests(unittest.IsolatedAsyncioTestCase):
     user turned that off."""
 
     def _server(self, tmp: str, enabled: bool) -> "ShareServer":
-        import vice.share as share_mod
         cfg = Config(output=OutputConfig(directory=tmp, auto_playlist_by_game=enabled))
         server = ShareServer(cfg)
+        # PlaylistStore loads in its constructor, so repointing the path is not
+        # enough on its own: the developer's real playlists are already in
+        # memory and leak into the assertions.
         server.playlists.path = Path(tmp) / "playlists.json"
+        server.playlists.load()
         return server
 
     async def test_auto_playlist_created_when_enabled(self) -> None:
@@ -1496,6 +1499,49 @@ class ShareServerTunnelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(server._tunnel_url, "https://brave-owl-clip.trycloudflare.com")
         server.broadcast.assert_awaited_once_with(
             {"type": "tunnel_url", "url": "https://brave-owl-clip.trycloudflare.com"}
+        )
+
+    async def test_cloudflare_api_host_is_not_the_tunnel_url(self) -> None:
+        # cloudflared's own API endpoint is https://api.trycloudflare.com, and
+        # taking that as the tunnel pointed every share link at Cloudflare's
+        # API, which answers "Method Not Allowed" (issue #143).
+        server = self._server()
+        server.broadcast = mock.AsyncMock()
+
+        proc = mock.Mock()
+        proc.stdout = self._stdout_lines([
+            b"2026-08-06T00:00:00Z INF Requesting new quick Tunnel on trycloudflare.com...\n",
+            b"2026-08-06T00:00:01Z ERR Failed to request quick Tunnel "
+            b"error=\"POST https://api.trycloudflare.com/tunnel failed\"\n",
+            b"2026-08-06T00:00:02Z INF |  https://brave-owl-clip.trycloudflare.com  |\n",
+        ])
+        proc.returncode = None
+        server._tunnel_proc = proc
+
+        await server._read_cloudflare_url()
+
+        self.assertEqual(server._tunnel_url, "https://brave-owl-clip.trycloudflare.com")
+
+    def test_quick_tunnel_url_picking(self) -> None:
+        from vice.share import _quick_tunnel_url
+
+        self.assertIsNone(_quick_tunnel_url("INF Requesting new quick Tunnel on trycloudflare.com..."))
+        self.assertIsNone(_quick_tunnel_url("POST https://api.trycloudflare.com/tunnel"))
+        self.assertIsNone(_quick_tunnel_url("https://developers.cloudflare.com/argo-tunnel"))
+        self.assertEqual(
+            _quick_tunnel_url("|  https://sensitive-clock-remote-tie.trycloudflare.com  |"),
+            "https://sensitive-clock-remote-tie.trycloudflare.com",
+        )
+        # A real address on the same line as the API host still wins.
+        self.assertEqual(
+            _quick_tunnel_url("https://api.trycloudflare.com then https://foo-bar.trycloudflare.com"),
+            "https://foo-bar.trycloudflare.com",
+        )
+        # A hyphenless host is a worse guess, not a rejected one, so a naming
+        # change at Cloudflare cannot break sharing outright.
+        self.assertEqual(
+            _quick_tunnel_url("https://singleword.trycloudflare.com"),
+            "https://singleword.trycloudflare.com",
         )
 
     async def test_first_tunnel_url_is_kept(self) -> None:

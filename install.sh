@@ -194,10 +194,19 @@ install_pkgs_pacman() {
                 python-pywebview python-aiohttp python-click
                 python-psutil python-evdev python-tomli-w
                 python-pyqt6 python-pyqt6-webengine python-qtpy
-                webkit2gtk-4.1 gstreamer gst-plugins-base gst-plugins-good)
+                webkit2gtk-4.1 gstreamer gst-plugins-base gst-plugins-good
+                xdotool xorg-xprop wmctrl)
+    # nvidia-smi answering already proves a driver userspace is installed, so
+    # there was nothing to add. Asking for nvidia-utils by name only managed to
+    # collide with legacy branches like nvidia-580xx-utils and abort the whole
+    # install (#147).
     if $HAS_NVIDIA; then
-        pkgs+=(nvidia-utils)
-        info "Will install NVIDIA utilities"
+        if pacman -Qq 2>/dev/null | grep -qE '^nvidia(-[0-9]+xx)?-utils$'; then
+            info "NVIDIA driver userspace already installed — leaving it alone"
+        else
+            pkgs+=(nvidia-utils)
+            info "Will install NVIDIA utilities"
+        fi
     fi
 
     # Clipboard tool for "Copy share link" — the in-page clipboard API is
@@ -265,6 +274,12 @@ install_pkgs_apt() {
         sudo apt-get install -y xclip >/dev/null 2>&1 || \
             warn "xclip not available; copying links will offer a manual-copy dialog."
     fi
+    # Focused-window detection, for game tagging, auto playlists and Discord
+    # presence. Without these it silently detects nothing (#152).
+    for p in xdotool x11-utils wmctrl; do
+        sudo apt-get install -y "$p" >/dev/null 2>&1 || \
+            warn "$p not available via apt; game detection will be limited."
+    done
     if [[ "$SESSION" == "wayland" ]] && ! command -v wf-recorder &>/dev/null; then
         sudo apt-get install -y wf-recorder >/dev/null 2>&1 || true
     fi
@@ -307,6 +322,12 @@ install_pkgs_dnf() {
         sudo dnf install -y xclip >/dev/null 2>&1 || \
             warn "xclip not available; copying links will offer a manual-copy dialog."
     fi
+    # Focused-window detection, for game tagging, auto playlists and Discord
+    # presence. Without these it silently detects nothing (#152).
+    for p in xdotool xprop wmctrl; do
+        sudo dnf install -y "$p" >/dev/null 2>&1 || \
+            warn "$p not available via dnf; game detection will be limited."
+    done
     if [[ "$SESSION" == "wayland" ]] && ! command -v wf-recorder &>/dev/null; then
         sudo dnf install -y wf-recorder >/dev/null 2>&1 || true
     fi
@@ -338,6 +359,12 @@ install_pkgs_zypper() {
         sudo zypper install -y xclip >/dev/null 2>&1 || \
             warn "xclip not available; copying links will offer a manual-copy dialog."
     fi
+    # Focused-window detection, for game tagging, auto playlists and Discord
+    # presence. Without these it silently detects nothing (#152).
+    for p in xdotool xprop wmctrl; do
+        sudo zypper install -y "$p" >/dev/null 2>&1 || \
+            warn "$p not available via zypper; game detection will be limited."
+    done
     if [[ "$SESSION" == "wayland" ]] && ! command -v wf-recorder &>/dev/null; then
         sudo zypper install -y wf-recorder >/dev/null 2>&1 || true
     fi
@@ -871,10 +898,16 @@ PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
 # Do not use shell syntax like \${HOME} or \$(id -u) in Environment= lines here.
 
 [Install]
-WantedBy=graphical-session.target
+# graphical-session.target alone was not enough: compositors that do not go
+# through uwsm never activate it, so the unit was enabled and then never
+# started (#139). default.target is always reached by the user manager.
+WantedBy=graphical-session.target default.target
 EOF
         systemctl --user daemon-reload
-        systemctl --user enable --now vice.service
+        # reenable, not enable: an install that already had the unit keeps its
+        # old symlinks otherwise and never picks up the new WantedBy.
+        systemctl --user reenable vice.service
+        systemctl --user restart vice.service
         info "Vice daemon service enabled — it will start automatically on login."
     fi
 fi

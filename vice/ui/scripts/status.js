@@ -68,6 +68,7 @@ async function fetchStatus() {
     if (d.version) viceVersion = d.version;
     setRecStatus(d.recording, d.backend, d.session_active);
     applyHotkeyAvailability(d.hotkeys_available);
+    applyRecorderState(d);
     // The daily check may have already run before this window opened.
     if (d.update && typeof onUpdateAvailable === 'function') {
       onUpdateAvailable(d.update, { delay: 1200 });
@@ -80,6 +81,21 @@ async function fetchStatus() {
       ro.classList.add('active');
     }
   } catch (_) {}
+}
+
+// The daemon stays up when the capture backend will not start, so the window
+// is reachable and can say what went wrong (#156). The watchdog keeps
+// retrying underneath, so both banners clear themselves once it recovers.
+function applyRecorderState(d) {
+  const banner = document.getElementById('recorder-banner');
+  if (banner) {
+    const failed = d.ready === false && !!d.recorder_error;
+    setText('recorder-banner-detail', d.recorder_error || '');
+    banner.hidden = !failed;
+  }
+  const cpu = document.getElementById('cpu-fallback-banner');
+  if (cpu && d.cpu_fallback) cpu.hidden = false;
+  else if (cpu && d.cpu_fallback === false) cpu.hidden = true;
 }
 
 function applyHotkeyAvailability(available) {

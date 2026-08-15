@@ -231,6 +231,29 @@ def _gsr_supports_flag(flag: str) -> bool:
     return flag in _gsr_help_text()
 
 
+# What GSR says when the GPU encoder itself is the problem, as opposed to a
+# bad monitor name or a missing output directory. A driver that stops
+# offering NVENC after a kernel update reports "Could not open video codec:
+# Function not implemented" (#156).
+_ENCODER_FAILURE_MARKERS = (
+    "could not open video codec",
+    "failed to create encoder",
+    "failed to load libnvidia-encode",
+    "libcuda",
+    "nvenc",
+    "vaapi",
+    "no encoder",
+    "encoder not supported",
+    "gpu encoding is not supported",
+)
+
+
+def _looks_like_encoder_failure(detail: str) -> bool:
+    """Whether a GSR startup failure is worth retrying on the CPU encoder."""
+    text = (detail or "").lower()
+    return any(marker in text for marker in _ENCODER_FAILURE_MARKERS)
+
+
 def _gsr_wants_disk_replay(rc) -> bool:
     storage = (getattr(rc, "gsr_replay_storage", "") or "auto").strip().lower()
     if storage == "disk":
@@ -290,6 +313,15 @@ def _gsr_audio_args(rc, *, split_for_volume: bool = True) -> list[str]:
             ]
             if parts:
                 kept.append("|".join(parts))
+        if tracks and len(kept) != len(tracks):
+            # Silently dropping the tracks a user built by hand looks like
+            # multi-track being broken (#137), so say what happened.
+            log.warning(
+                "Capture desktop audio is off, so %d of your %d separate audio "
+                "tracks will not be recorded. Turn it back on under Settings → "
+                "Audio to keep them.",
+                len(tracks) - len(kept), len(tracks),
+            )
         tracks = kept
     if tracks:
         if _captures_microphone(rc):
@@ -311,10 +343,10 @@ def _gsr_audio_args(rc, *, split_for_volume: bool = True) -> list[str]:
         split_for_volume
         and _captures_desktop_audio(rc)
         and _captures_microphone(rc)
-        and _volume_mix_wanted(rc)
+        and _save_audio_pass_wanted(rc)
     ):
-        # Record desktop and mic as separate tracks so the save-time volume
-        # pass can balance them before mixing down.
+        # Record desktop and mic as separate tracks so the save-time audio
+        # pass can balance and downmix them before mixing down.
         desktop_source = (getattr(rc, "gsr_audio_source", "") or "default_output").strip() or "default_output"
         _warn_if_desktop_source_is_mic(desktop_source)
         return ["-a", desktop_source, "-a", _gsr_mic_source(rc)]
@@ -784,12 +816,19 @@ def _mic_volume(rc) -> float:
         return 1.0
 
 
-def _volume_mix_wanted(rc) -> bool:
-    """Whether clips need a save-time volume pass. Off at the defaults so the
+def _mic_mono(rc) -> bool:
+    """Whether the microphone should be downmixed to the centre (#146)."""
+    return bool(getattr(rc, "microphone_mono", False)) and _captures_microphone(rc)
+
+
+def _save_audio_pass_wanted(rc) -> bool:
+    """Whether clips need a save-time audio pass. Off at the defaults so the
     recording pipeline stays byte-identical for everyone who never touches
     the sliders. Separate audio_tracks keep full control instead."""
     if getattr(rc, "audio_tracks", None):
         return False
+    if _mic_mono(rc):
+        return True
     return abs(_desktop_volume(rc) - 1.0) > 0.01 or abs(_mic_volume(rc) - 1.0) > 0.01
 
 
@@ -1628,18 +1667,27 @@ async def _count_audio_streams(path: Path) -> int:
         return 0
 
 
-def _volume_mix_cmd(path: Path, tmp: Path, streams: int, dv: float, mv: float) -> list[str]:
+# Both channels get the same summed signal, so a mic that only carries one
+# channel lands in the centre instead of one ear (#146). Staying stereo keeps
+# amix happy: it refuses inputs with mismatched channel layouts.
+_MIC_MONO_PAN = "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1"
+
+
+def _volume_mix_cmd(
+    path: Path, tmp: Path, streams: int, dv: float, mv: float, mic_mono: bool = False
+) -> list[str]:
     ext = path.suffix.lstrip(".") or "mp4"
     audio_codec = ["-c:a", "libopus", "-b:a", "128k"] if ext == "mkv" else ["-c:a", "aac", "-b:a", "160k"]
     faststart = ["-movflags", "+faststart"] if ext == "mp4" else []
+    mono = f"{_MIC_MONO_PAN}," if mic_mono else ""
     if streams >= 2:
         filter_graph = (
-            f"[0:a:0]volume={dv}[a0];[0:a:1]volume={mv}[a1];"
+            f"[0:a:0]volume={dv}[a0];[0:a:1]{mono}volume={mv}[a1];"
             f"[a0][a1]amix=inputs=2:normalize=0[aout]"
         )
         mapping = ["-filter_complex", filter_graph, "-map", "0:v", "-map", "[aout]"]
     else:
-        mapping = ["-af", f"volume={dv}"]
+        mapping = ["-af", f"{mono}volume={dv}"]
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-i", str(path),
@@ -1652,29 +1700,35 @@ def _volume_mix_cmd(path: Path, tmp: Path, streams: int, dv: float, mv: float) -
 
 
 async def _apply_volume_mix(path: Path, rc) -> None:
-    """Balance desktop vs mic loudness in-place. Video is stream-copied, only
-    audio re-encodes. Any failure leaves the clip untouched."""
-    if not _volume_mix_wanted(rc):
+    """Balance desktop vs mic loudness and downmix the mic in-place. Video is
+    stream-copied, only audio re-encodes. Any failure leaves the clip
+    untouched."""
+    if not _save_audio_pass_wanted(rc):
         return
     if [t for t in (getattr(rc, "audio_tracks", None) or []) if str(t).strip()]:
         # User-defined tracks are never split for volume, and the mix graph
         # below only handles the first two, so leave them alone.
         return
     dv, mv = _desktop_volume(rc), _mic_volume(rc)
+    mic_mono = _mic_mono(rc)
     streams = await _count_audio_streams(path)
     if streams == 0:
         return
     if streams == 1:
         if _captures_desktop_audio(rc) and _captures_microphone(rc):
-            # Both sources share one track (clip recorded before the volume
-            # change took effect); can't balance them separately.
-            log.debug("Skipping volume mix: single mixed audio track in %s", path.name)
+            # Both sources share one track (clip recorded before the setting
+            # change took effect); can't touch the mic on its own.
+            log.debug("Skipping audio pass: single mixed audio track in %s", path.name)
             return
-        dv = dv if _captures_desktop_audio(rc) else mv
+        # A lone desktop track must not be downmixed as if it were the mic.
+        if _captures_desktop_audio(rc):
+            mic_mono = False
+        else:
+            dv = mv
 
     ext = path.suffix.lstrip(".") or "mp4"
     tmp = path.with_suffix(f".mix.{ext}")
-    cmd = _volume_mix_cmd(path, tmp, streams, dv, mv)
+    cmd = _volume_mix_cmd(path, tmp, streams, dv, mv, mic_mono)
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -1683,11 +1737,11 @@ async def _apply_volume_mix(path: Path, rc) -> None:
         )
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
         if proc.returncode != 0:
-            log.warning("volume mix failed, keeping clip as recorded: %s", stderr.decode())
+            log.warning("audio pass failed, keeping clip as recorded: %s", stderr.decode())
             tmp.unlink(missing_ok=True)
             return
     except asyncio.TimeoutError:
-        log.warning("volume mix timed out, keeping clip as recorded")
+        log.warning("audio pass timed out, keeping clip as recorded")
         tmp.unlink(missing_ok=True)
         return
     tmp.replace(path)
@@ -1711,6 +1765,13 @@ class GSRRecorder(Recorder):
         self._watch_task: Optional[asyncio.Task] = None
         # Kept so an unexpected death can say why instead of just "died".
         self._stderr_tail: deque[str] = deque(maxlen=12)
+        # How many routine GSR lines still go to the log at INFO. The useful
+        # ones are all at startup, so a small budget covers them.
+        self._stderr_info_budget = 40
+        # Set when the GPU encoder was unusable this run and CPU encoding
+        # took over. Never persisted — every start tries the GPU first, so a
+        # driver that gets fixed is picked up without the user doing anything.
+        self.cpu_fallback = False
 
     @property
     def name(self) -> str:
@@ -1719,7 +1780,7 @@ class GSRRecorder(Recorder):
     def is_healthy(self) -> bool:
         return self._running and self._proc is not None and self._proc.returncode is None
 
-    def _build_cmd(self) -> list[str]:
+    def _build_cmd(self, cpu_encoder: bool = False) -> list[str]:
         rc = self.cfg.recording
         extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o"})
         cmd = ["gpu-screen-recorder"]
@@ -1754,6 +1815,9 @@ class GSRRecorder(Recorder):
         if not _gsr_has_any_flag(extra, "-a"):
             cmd += _gsr_audio_args(rc)
 
+        if cpu_encoder and not _gsr_has_any_flag(extra, "-encoder"):
+            cmd += ["-encoder", "cpu"]
+
         cmd += extra
 
         # Output directory (gsr writes files here on SIGUSR1)
@@ -1761,37 +1825,72 @@ class GSRRecorder(Recorder):
         cmd += ["-o", str(self._out_dir)]
         return cmd
 
-    async def start(self) -> None:
-        cmd = self._build_cmd()
+    async def _try_start(self, cpu_encoder: bool) -> Optional[str]:
+        """Spawn GSR. Returns None when it stayed up, else why it did not."""
+        cmd = self._build_cmd(cpu_encoder)
         log.info("Starting GSR: %s", " ".join(cmd))
-        self._running = True
-
         self._stderr_tail.clear()
         self._proc = await _spawn_capture(cmd, asyncio.subprocess.PIPE)
         try:
             await asyncio.wait_for(self._proc.wait(), timeout=1.0)
-            stderr_text = await _read_stream_text(self._proc.stderr)
-            detail = _summarize_process_error(
-                "gpu-screen-recorder",
-                self._proc.returncode,
-                stderr_text,
+        except asyncio.TimeoutError:
+            return None
+        stderr_text = await _read_stream_text(self._proc.stderr)
+        detail = _summarize_process_error(
+            "gpu-screen-recorder",
+            self._proc.returncode,
+            stderr_text,
+        )
+        # GSR may have forked its helper before giving up.
+        _signal_group(self._proc, signal.SIGKILL)
+        self._proc = None
+        return detail
+
+    async def start(self) -> None:
+        self._running = True
+        self.cpu_fallback = False
+        self._stderr_info_budget = 40
+
+        detail = await self._try_start(cpu_encoder=False)
+        if detail is not None and _looks_like_encoder_failure(detail) and _gsr_supports_flag("-encoder"):
+            log.warning(
+                "The GPU encoder would not open (%s) — retrying on CPU. "
+                "This is usually a driver that needs a reboot after an update.",
+                detail,
             )
-            # GSR may have forked its helper before giving up.
-            _signal_group(self._proc, signal.SIGKILL)
-            self._proc = None
+            retry_detail = await self._try_start(cpu_encoder=True)
+            if retry_detail is None:
+                self.cpu_fallback = True
+                detail = None
+            else:
+                log.error("CPU encoding did not work either: %s", retry_detail)
+
+        if detail is not None:
             self._running = False
             raise RuntimeError(f"gpu-screen-recorder failed to start: {detail}")
-        except asyncio.TimeoutError:
-            pass
         self._watch_task = asyncio.create_task(self._stderr_reader())
 
     async def _stderr_reader(self) -> None:
         assert self._proc and self._proc.stderr
         async for line in self._proc.stderr:
             text = line.decode(errors="replace").rstrip()
-            if text and not _gsr_progress_line(text):
-                self._stderr_tail.append(text)
-            log.debug("gsr: %s", text)
+            if not text or _gsr_progress_line(text):
+                log.debug("gsr: %s", text)
+                continue
+            self._stderr_tail.append(text)
+            # GSR's own complaints used to only exist at debug level, which
+            # made an audio source it could not find or a stream it dropped
+            # invisible in a normal vice.log. Chatter is capped so a build
+            # that prints something we do not recognise as progress cannot
+            # fill the log over a long session; complaints never are.
+            lowered = text.lower()
+            if any(w in lowered for w in ("error", "failed", "not found", "unable", "invalid")):
+                log.warning("gsr: %s", text)
+            elif self._stderr_info_budget > 0:
+                self._stderr_info_budget -= 1
+                log.info("gsr: %s", text)
+            else:
+                log.debug("gsr: %s", text)
 
     def last_output(self) -> str:
         """GSR's last non-routine stderr, for explaining an unexpected death.

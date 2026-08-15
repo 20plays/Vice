@@ -50,8 +50,11 @@ from .runtime import (
     actual_home_dir,
     normalize_runtime_environment,
     resolve_path,
+    has_display,
     runtime_env_snapshot,
+    running_under_systemd,
     user_systemd_env_snapshot,
+    wait_for_display,
 )
 from .share import ShareServer
 from . import audio
@@ -75,6 +78,29 @@ def _load_default_games() -> list[dict]:
 
 
 _DEFAULT_GAMES: list[dict] = _load_default_games()
+
+
+def _best_game_match(entries, haystacks) -> Optional[str]:
+    """Name of the entry whose longest needle matches, or None.
+
+    Needles are substrings, so a short one swallows a longer one that is more
+    specific: "hades" matches Hades II's "hades2.exe", and a generic
+    "client-win64-shipping.exe" matches every Unreal game that ships under
+    that name. Taking the longest match rather than the first in list order
+    means the specific entry wins wherever the two overlap, and it makes a
+    Steam id safe to use even when a longer id starts with it
+    (steam_app_400 vs Garry's Mod's steam_app_4000). Equal lengths keep list
+    order, so nothing else moves.
+    """
+    best_name: Optional[str] = None
+    best_len = 0
+    for name, matches in entries:
+        for needle in matches or []:
+            n = (needle or "").lower()
+            # Length first: it is cheap and skips most substring scans.
+            if len(n) > best_len and any(n in h for h in haystacks):
+                best_name, best_len = name, len(n)
+    return best_name
 
 PID_FILE    = Path("/tmp/vice/vice.pid")
 SOCKET_FILE = Path("/tmp/vice/vice.sock")
@@ -129,6 +155,8 @@ class ViceDaemon:
         self._update_task: Optional[asyncio.Task] = None
         self._update: Optional[dict] = None
         self._ready = False
+        # Why the recorder is not running, for the UI banner. Empty when it is.
+        self._recorder_error = ""
         # Discord Rich Presence — default enabled, but only shown for matched games.
         self._discord_rpc = None  # type: ignore[var-annotated]
         self._discord_task: Optional[asyncio.Task] = None
@@ -199,17 +227,7 @@ class ViceDaemon:
             self._handle_ipc, path=str(SOCKET_FILE)
         )
 
-        try:
-            await self.hotkeys.start()
-            self.hotkeys_available = self.hotkeys.available
-            await self.recorder.start()
-            self._ready = True
-        except Exception as exc:
-            log.error(
-                "Vice daemon failed during startup (backend=%s): %s",
-                self.recorder.name, exc,
-            )
-            log.exception("Startup traceback")
+        async def _abort_startup() -> None:
             try:
                 server.close()
                 await server.wait_closed()
@@ -234,29 +252,70 @@ class ViceDaemon:
                         p.unlink()
                 except OSError:
                     pass
+
+        try:
+            await self.hotkeys.start()
+            self.hotkeys_available = self.hotkeys.available
+        except Exception as exc:
+            log.error("Vice daemon failed during startup: %s", exc)
+            log.exception("Startup traceback")
+            await _abort_startup()
             raise
+
+        # A recorder that will not start is not a reason to take the UI down
+        # with it. It used to be: the share server was stopped on the way out,
+        # so the app reported "the UI server did not respond" and the user had
+        # no way to reach Settings and pick an encoder that works, which is the
+        # one thing that would have fixed it (#156).
+        try:
+            await self.recorder.start()
+            self._ready = True
+            self._recorder_error = ""
+        except Exception as exc:
+            self._ready = False
+            self._recorder_error = str(exc)
+            log.error(
+                "Recorder failed to start (backend=%s): %s",
+                self.recorder.name, exc,
+            )
+            log.exception("Recorder startup traceback")
+            if not self.share:
+                # No UI to explain it through, so this is still fatal.
+                await _abort_startup()
+                raise
+            log.error(
+                "Vice is running without a recorder. Open the Vice window to "
+                "see why and to change recording settings."
+            )
+
         if self.share:
             log.info("Vice local control UI: %s", self.share.local_base_url())
         else:
             log.info("Vice local control UI disabled by config")
         log.info(
-            "Vice daemon ready (backend=%s, share_enabled=%s)",
+            "Vice daemon ready (backend=%s, share_enabled=%s, recording=%s)",
             self.recorder.name,
             bool(self.share),
+            self._ready,
         )
 
         if self.share:
             asyncio.create_task(
                 self.share.broadcast({
-                    "type": "status", "recording": True, "ready": self._ready,
+                    "type": "status", "recording": self._ready, "ready": self._ready,
                     "backend": self.recorder.name,
                     "session_active": self._session_active,
                     "clip_key": self.cfg.hotkeys.clip,
                     "hotkeys_available": self.hotkeys_available,
+                    "recorder_error": self._recorder_error,
                 })
             )
 
-        click.echo(f"[Vice {__version__}] Recording started.")
+        if self._ready:
+            click.echo(f"[Vice {__version__}] Recording started.")
+        else:
+            click.echo(f"[Vice {__version__}] Started, but not recording.")
+            click.echo(f"  Problem   : {self._recorder_error}")
         click.echo(f"  Backend   : {self.recorder.name}")
         click.echo(f"  Clip key  : {clip_key or '(none)'}")
         click.echo(f"  Output    : {self.cfg.output.directory}")
@@ -294,6 +353,8 @@ class ViceDaemon:
                     "session_active": self._session_active,
                     "clip_key": self.cfg.hotkeys.clip,
                     "hotkeys_available": available,
+                    "recorder_error": self._recorder_error,
+                    "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
                 })
             )
 
@@ -313,11 +374,13 @@ class ViceDaemon:
                 click.echo(f"[Vice] Share URL:  {url}\n")
             asyncio.create_task(
                 self.share.broadcast({
-                    "type": "status", "recording": True, "ready": self._ready,
+                    "type": "status", "recording": self._ready, "ready": self._ready,
                     "backend": self.recorder.name,
                     "session_active": self._session_active,
                     "clip_key": self.cfg.hotkeys.clip,
                     "hotkeys_available": self.hotkeys_available,
+                    "recorder_error": self._recorder_error,
+                    "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
                 })
             )
 
@@ -331,6 +394,8 @@ class ViceDaemon:
                 "session_active": self._session_active,
                 "clip_key": self.cfg.hotkeys.clip,
                 "hotkeys_available": self.hotkeys_available,
+                "recorder_error": self._recorder_error,
+                "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
             })
         )
 
@@ -378,12 +443,18 @@ class ViceDaemon:
                         await self.recorder.start()
             except Exception as exc:
                 log.error("Recorder restart failed: %s — retrying in %.0f s", exc, backoff)
+                self._ready = False
+                self._recorder_error = str(exc)
                 self._broadcast_status(recording=False)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 300.0)
                 last_wall = time.time()
                 continue
             log.info("Recorder restarted (backend=%s)", self.recorder.name)
+            # Clears the banner when the watchdog recovers a recorder that
+            # never came up in the first place (#156).
+            self._ready = True
+            self._recorder_error = ""
             self._broadcast_status(recording=True)
             # A process that clears the startup probe and then dies seconds
             # later never reaches the failed-start path above, so without this
@@ -433,13 +504,21 @@ class ViceDaemon:
             # Try to restore the previous recorder so capture keeps running.
             try:
                 await old_recorder.start()
+                self._ready = True
+                self._recorder_error = ""
             except Exception as restore_exc:
                 log.error("Failed to restore previous recorder: %s", restore_exc)
+                self._ready = False
+                self._recorder_error = str(restore_exc)
             raise
 
         self.recorder = new_recorder
         self._recording_sig = self._recording_signature()
         self._pending_recording_apply = False
+        # Covers recovering from a recorder that never came up at startup
+        # (#156): changing settings is how the user gets out of that.
+        self._ready = True
+        self._recorder_error = ""
         return True
 
     # ── follow-the-pointer capture (#133) ─────────────────────────────────────
@@ -552,12 +631,14 @@ class ViceDaemon:
             if self.share:
                 await self.share.broadcast({
                     "type": "status",
-                    "recording": True,
+                    "recording": self._ready,
                     "ready": self._ready,
                     "backend": self.recorder.name,
                     "session_active": self._session_active,
                     "clip_key": self.cfg.hotkeys.clip,
                     "hotkeys_available": self.hotkeys_available,
+                    "recorder_error": self._recorder_error,
+                    "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
                 })
 
     # ── Discord Rich Presence ────────────────────────────────────────────
@@ -698,7 +779,7 @@ class ViceDaemon:
         """The game to keep showing when no matched window is focused: the
         remembered one while its process lives (#112), else a visible-window
         scan for compositors that can't report focus reliably (#102)."""
-        from .active_window import _read_proc_comm, list_candidate_windows
+        from .active_window import _read_proc_comm
         if not self.cfg.discord.persist_while_running:
             return None
         if self._discord_current_game and self._discord_current_pid > 0:
@@ -708,11 +789,26 @@ class ViceDaemon:
         self._discord_scan_tick += 1
         if self._discord_scan_tick % 3:
             return None
-        for win in await asyncio.to_thread(list_candidate_windows):
+        hit = await asyncio.to_thread(self._scan_visible_for_game)
+        if hit:
+            matched, win = hit
+            self._remember_discord_game_process(win)
+            return matched
+        return None
+
+    def _scan_visible_for_game(self) -> Optional[tuple[str, dict]]:
+        """First visible window matching the games list, with the window.
+
+        Sync: the scan shells out to the compositor. KWin only partly mirrors
+        focus into XWayland's EWMH properties, so on KDE Wayland asking for the
+        focused window comes back empty and this is the only thing that works
+        (#102, #152).
+        """
+        from .active_window import list_candidate_windows
+        for win in list_candidate_windows():
             matched = self._match_game(win)
             if matched:
-                self._remember_discord_game_process(win)
-                return matched
+                return matched, win
         return None
 
     async def _clear_discord_presence(self) -> None:
@@ -744,17 +840,28 @@ class ViceDaemon:
         """
         game = None
         win = None
+        scanned = False
         try:
             from .active_window import get_active_window
             win = get_active_window()
             game = self._match_game(win) if win else None
+            if game is None:
+                # Focus detection is unreliable on KDE and GNOME under Wayland,
+                # where it goes through XWayland. Discord presence has fallen
+                # back to a visible-window scan since #102; without the same
+                # fallback here, clips on those sessions were never tagged and
+                # never landed in an auto playlist (#152).
+                hit = self._scan_visible_for_game()
+                if hit:
+                    scanned = True
+                    game, win = hit
         except Exception:
             log.debug("Game detection for clip tagging failed", exc_info=True)
         # One line per clip so an unmatched game or a compositor miss is
         # diagnosable from vice.log. Local only, never leaves the machine.
         log.info(
-            "Clip game detection: process=%r class=%r matched=%r",
-            (win or {}).get("process"), (win or {}).get("class"), game,
+            "Clip game detection: process=%r class=%r matched=%r scanned=%s",
+            (win or {}).get("process"), (win or {}).get("class"), game, scanned,
         )
         self._last_clip_game = game
         if not getattr(self.cfg.output, "tag_clips_with_game", False):
@@ -766,22 +873,16 @@ class ViceDaemon:
         cls  = (win.get("class") or "").lower()
         haystacks = (proc, cls)
         # User custom games first — explicit user intent beats the bundled list.
-        for g in self.cfg.discord.custom_games:
-            for needle in g.matches:
-                n = (needle or "").lower()
-                if n and any(n in h for h in haystacks):
-                    return g.name
-        for g in _DEFAULT_GAMES:
-            for needle in g.get("matches") or []:
-                n = (needle or "").lower()
-                if n and any(n in h for h in haystacks):
-                    return g["name"]
-        return None
+        custom = [(g.name, g.matches) for g in self.cfg.discord.custom_games]
+        bundled = [(g["name"], g.get("matches")) for g in _DEFAULT_GAMES]
+        return _best_game_match(custom, haystacks) or _best_game_match(bundled, haystacks)
 
     def _get_status(self) -> dict:
         return {
             "ready":          self._ready,
-            "recording":      True,
+            "recording":      self._ready,
+            "recorder_error": self._recorder_error,
+            "cpu_fallback":   bool(getattr(self.recorder, "cpu_fallback", False)),
             "backend":          self.recorder.name,
             "clips":            self._clip_count,
             "session_active":   self._session_active,
@@ -1183,6 +1284,39 @@ def _setup_daemon_logging(debug: bool) -> None:
     )
 
 
+def _installed_service_file() -> Optional[Path]:
+    """Where vice.service actually is, in the order systemd resolves it.
+
+    Only the user's own directory used to be checked, so a package install
+    that put the unit in /usr/lib reported "(not installed)" while the service
+    was sitting there enabled (#139).
+    """
+    candidates = (
+        actual_home_dir() / ".config" / "systemd" / "user" / "vice.service",
+        Path("/etc/systemd/user/vice.service"),
+        Path("/usr/lib/systemd/user/vice.service"),
+        Path("/usr/local/lib/systemd/user/vice.service"),
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _systemctl_user_query(verb: str) -> str:
+    """`systemctl --user <verb> vice.service`, as a single word for doctor."""
+    if shutil.which("systemctl") is None:
+        return "(systemctl not found)"
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", verb, "vice.service"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except Exception as exc:
+        return f"(query failed: {exc})"
+    return (result.stdout or result.stderr or "").strip() or "(unknown)"
+
+
 def _tail_text_file(path: Path, lines: int = 20) -> str:
     try:
         content = path.read_text(errors="replace").splitlines()
@@ -1229,6 +1363,13 @@ def start(debug: bool, open_ui: bool) -> None:
     _setup_daemon_logging(debug)
     log.info("Vice daemon startup requested (python=%s)", sys.executable)
     log.info("Runtime environment at daemon start: %s", runtime_env_snapshot())
+
+    # The unit is wanted by default.target, which the user manager can reach
+    # before the compositor has exported anything (#139). Only under systemd:
+    # a terminal start must never sit there waiting.
+    if running_under_systemd() and not has_display():
+        wait_for_display()
+        log.info("Runtime environment after session wait: %s", runtime_env_snapshot())
 
     if SOCKET_FILE.exists():
         resp = asyncio.run(_ipc("status", timeout=1.5))
@@ -1337,7 +1478,7 @@ def doctor() -> None:
     vice_app_cmd = shutil.which("vice-app") or "(not found)"
     package_file = Path(sys.modules["vice"].__file__).resolve()
     systemd_env = user_systemd_env_snapshot()
-    service_file = actual_home_dir() / ".config" / "systemd" / "user" / "vice.service"
+    service_file = _installed_service_file()
     running_status = asyncio.run(_ipc("status"))
 
     click.echo("Vice doctor")
@@ -1366,8 +1507,10 @@ def doctor() -> None:
     click.echo("")
 
     click.echo("Service")
-    if service_file.exists():
+    if service_file is not None:
         click.echo(f"  File: {service_file}")
+        click.echo(f"  Enabled: {_systemctl_user_query('is-enabled')}")
+        click.echo(f"  Active: {_systemctl_user_query('is-active')}")
         service_tail = _tail_text_file(service_file, lines=30)
         if service_tail:
             for line in service_tail.splitlines():

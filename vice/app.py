@@ -531,6 +531,17 @@ def _nvidia_driver_major() -> "int | None":
     return int(match.group(1)) if match else None
 
 
+def _hardware_video_decode_enabled() -> bool:
+    """ui.hardware_video_decode, read defensively: this runs before anything
+    else is up, and a broken config must not stop the window from opening."""
+    try:
+        from .config import load as load_config
+        return bool(load_config().ui.hardware_video_decode)
+    except Exception as exc:
+        log.debug("Could not read ui.hardware_video_decode: %s", exc)
+        return False
+
+
 def _prepare_webview_environment() -> None:
     """Set environment for a stable QtWebEngine (Chromium) session.
 
@@ -547,7 +558,10 @@ def _prepare_webview_environment() -> None:
         video-frames: Chromium's hardware video decode is broken on many
         Linux GPU/driver combos and renders <video> as a black or grey
         rectangle while the rest of the UI works. Clips are short, local
-        files; software decode is cheap and always correct.
+        files; software decode is cheap and always correct. High-resolution
+        AV1 and HEVC are the exception — the CPU cannot keep up and the
+        preview stutters (#140) — so ui.hardware_video_decode drops both
+        flags for machines where the GPU path does work.
       • --autoplay-policy: clip previews start without a click.
       • --disable-features=Vulkan (NVIDIA below driver 550): QtWebEngine
         cannot initialise GBM on NVIDIA and falls back to Vulkan, which
@@ -605,11 +619,14 @@ def _prepare_webview_environment() -> None:
 
     if "QTWEBENGINE_CHROMIUM_FLAGS" in os.environ:
         return  # user override — leave it alone
-    flags = [
-        "--disable-accelerated-video-decode",
-        "--disable-gpu-memory-buffer-video-frames",
-        "--autoplay-policy=no-user-gesture-required",
-    ]
+    flags = ["--autoplay-policy=no-user-gesture-required"]
+    if _hardware_video_decode_enabled():
+        log.info("Hardware video decode enabled by config — clip previews may render black")
+    else:
+        flags += [
+            "--disable-accelerated-video-decode",
+            "--disable-gpu-memory-buffer-video-frames",
+        ]
     if _is_nvidia():
         major = _nvidia_driver_major()
         if major is not None and major < _VULKAN_MIN_DRIVER:

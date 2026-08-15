@@ -36,8 +36,9 @@ function pick(id, val) {
 
 function syncFormFromCfg() {
   const r = cfg.recording || {}, h = cfg.hotkeys || {}, o = cfg.output || {}, s = cfg.sharing || {}, d = cfg.discord || {};
-  const u = cfg.updates || {}, n = cfg.notifications || {};
+  const u = cfg.updates || {}, n = cfg.notifications || {}, ui = cfg.ui || {};
   document.getElementById('s-update-check').checked = u.check_on_start !== false;
+  document.getElementById('s-hw-decode').checked = !!ui.hardware_video_decode;
   const volNotify = Math.round((n.sound_volume ?? 1) * 100);
   document.getElementById('s-vol-notify').value = volNotify;
   setText('s-vol-notify-v', volNotify ? volNotify + '%' : 'Off');
@@ -61,6 +62,7 @@ function syncFormFromCfg() {
   document.getElementById('s-audio').checked = r.capture_audio !== false;
   pick('s-gsr-audio', r.gsr_audio_source ?? 'default_output');
   pick('s-mic-source', r.microphone_source ?? 'default_input');
+  document.getElementById('s-mic-mono').checked = !!r.microphone_mono;
   const volDesktop = Math.round((r.desktop_volume ?? 1) * 100);
   document.getElementById('s-vol-desktop').value = volDesktop;
   setText('s-vol-desktop-v', volDesktop + '%');
@@ -603,6 +605,7 @@ async function saveSettings() {
       gsr_replay_storage: document.getElementById('s-replay-storage').value,
       capture_microphone: document.getElementById('settings-mic-toggle').checked,
       microphone_source: document.getElementById('s-mic-source').value || 'default_input',
+      microphone_mono:   document.getElementById('s-mic-mono').checked,
       desktop_volume:    (+document.getElementById('s-vol-desktop').value) / 100,
       microphone_volume: (+document.getElementById('s-vol-mic').value) / 100,
       wf_microphone_strategy: document.getElementById('s-wf-mic').value,
@@ -632,6 +635,9 @@ async function saveSettings() {
     },
     notifications: {
       sound_volume: (+document.getElementById('s-vol-notify').value) / 100,
+    },
+    ui: {
+      hardware_video_decode: document.getElementById('s-hw-decode').checked,
     },
     discord: {
       enabled: document.getElementById('s-discord-enabled').checked,

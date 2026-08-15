@@ -50,6 +50,7 @@ function handleWS(msg) {
   } else if (msg.type === 'status') {
     setRecStatus(msg.recording, msg.backend, msg.session_active);
     applyHotkeyAvailability(msg.hotkeys_available);
+    applyRecorderState(msg);
   } else if (msg.type === 'tunnel_url') {
     tunnelUrl = msg.url;
     const ro = document.getElementById('tunnel-readout');

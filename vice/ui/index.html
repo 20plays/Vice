@@ -131,6 +131,29 @@
       </div>
     </div>
 
+    <!-- Shown when the capture backend would not start. The daemon stays up
+         so this can be said out loud and Settings stays reachable (#156). -->
+    <div id="recorder-banner" hidden>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+      <div class="codec-banner-text">
+        <strong>Vice is not recording.</strong>
+        <span id="recorder-banner-detail" class="mono"></span>
+        <span id="recorder-banner-hint">Vice keeps retrying on its own. If it is an encoder problem, a reboot after a driver update usually clears it, or pick a different encoder under Settings → Recording.</span>
+      </div>
+    </div>
+
+    <!-- Shown when the GPU encoder was unusable and CPU encoding took over. -->
+    <div id="cpu-fallback-banner" hidden>
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/></svg>
+      <div class="codec-banner-text">
+        <strong>Recording on the CPU.</strong>
+        Your GPU encoder would not open, so Vice fell back to CPU encoding to keep clipping. That costs frames in games. This is usually a driver that needs a reboot after an update. Vice tries the GPU first every time it starts, so once that is sorted this goes away on its own.
+      </div>
+      <button class="codec-banner-close" onclick="document.getElementById('cpu-fallback-banner').hidden = true" aria-label="Dismiss">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="M6 6l12 12"/></svg>
+      </button>
+    </div>
+
     <!-- Shown when the running Qt WebEngine build has no H.264 decoder
          (PyPI PyQt6-WebEngine wheels), so clips can never play in-app. -->
     <div id="codec-banner" hidden>
@@ -509,6 +532,11 @@
               </div>
 
               <div class="settings-row">
+                <div class="s-label"><strong>Hardware video decode in previews</strong><span>Let your GPU decode clips in this window instead of the CPU. Worth turning on if high-resolution AV1 or HEVC previews stutter. It renders video black on some drivers, so if that happens turn it back off. Takes effect next time you open Vice.</span></div>
+                <label class="toggle"><input type="checkbox" id="s-hw-decode"><span class="toggle-track"></span></label>
+              </div>
+
+              <div class="settings-row">
                 <div class="s-label"><strong>Recording backend</strong><span>Screen capture method</span></div>
                 <select id="s-backend" onchange="onBackendChange()">
                   <option value="auto">Auto (recommended)</option>
@@ -558,6 +586,11 @@
                 <select id="s-mic-source">
                   <option value="default_input">Default input</option>
                 </select>
+              </div>
+
+              <div class="settings-row">
+                <div class="s-label"><strong>Mono microphone</strong><span>Centres your mic in the clip. Turn this on if your voice only comes out of one ear, which is what most XLR and single-channel interfaces do. Applied when the clip is saved, so it needs mic capture on and no separate audio tracks.</span></div>
+                <label class="toggle"><input type="checkbox" id="s-mic-mono"><span class="toggle-track"></span></label>
               </div>
 
               <div class="settings-row" id="row-vol-desktop">
