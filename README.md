@@ -291,6 +291,15 @@ https://www.star-history.com/?repos=eklonofficial%2FVice&type=date&legend=top-le
 
 Created by **Andrew Marin** ([github.com/eklonofficial](https://github.com/eklonofficial)). Bug reports and PRs welcome.
 
+Vice is better because these people sent patches:
+
+- [@Sea-Bass-cmd](https://github.com/Sea-Bass-cmd), for stopping the UI holding on to video and thumbnails it was not showing
+- [@SlavWolf](https://github.com/SlavWolf), for fixing session recordings ignoring the configured container, and for Guilty Gear Strive
+- [@LiljaGirly](https://github.com/LiljaGirly), for Star Citizen and Trailmakers
+- [@NiyuniCidron](https://github.com/NiyuniCidron), for fixing the cloudflared install in the installer
+
+And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
+
 ## License
 
 [GPL-3.0](LICENSE)
