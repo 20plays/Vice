@@ -29,10 +29,17 @@
 /* ── Clip cards ─────────────────────────────────────────────────── */
 .clips-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
 
+/* content-visibility lets the engine skip layout, paint and — the part that
+   matters — the decoded thumbnail bitmap for cards scrolled out of view. A
+   640px thumb costs about 900 KB decoded, so a large reel was holding a few
+   hundred MB of bitmaps it could not see, plus a backdrop blur per card. The
+   auto keyword means the remembered size is used once a card has rendered
+   once; the length is only the first guess, so the scrollbar does not jump. */
 .clip-card { position: relative; background: var(--card-sheen), rgba(255,255,255,.02);
   backdrop-filter: blur(26px); border-radius: var(--r-card);
   box-shadow: var(--glass-edge), 0 10px 30px rgba(0,0,0,.35);
   transition: transform .25s var(--ease), box-shadow .25s;
+  content-visibility: auto; contain-intrinsic-size: auto 205px;
   animation: cardIn .4s var(--ease) backwards; }
 .clip-card:hover { transform: translateY(-3px); }
 @keyframes cardIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }

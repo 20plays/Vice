@@ -438,6 +438,7 @@ function editorLeave() {
   document.querySelector('.stage').classList.remove('stage-editor');
   document.getElementById('quit-row')?.classList.remove('ed-hidden');
   edSetPlaying(false);
+  edReleasePool();
   if (edDirty) edSaveNow();
 }
 
