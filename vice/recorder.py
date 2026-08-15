@@ -1184,7 +1184,7 @@ class Recorder(ABC):
 
         out_dir = resolve_path(self.cfg.output.directory)
         out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = _next_session_path(out_dir)
+        out_path = _next_session_path(out_dir, _container(self.cfg.recording))
 
         cmd = self._build_session_cmd(out_path)
         if cmd is None:
@@ -1309,7 +1309,7 @@ class Recorder(ABC):
             cmd += ["-f", str(rc.fps)]
         cmd += _gsr_resolution_args(rc, extra)
         if not _gsr_has_any_flag(extra, "-c"):
-            cmd += ["-c", "mp4"]
+            cmd += ["-c", _container(rc)]
         codec = _gsr_codec_for_encoder(rc.encoder, _color_depth(rc))
         if codec and not _gsr_has_any_flag(extra, "-k"):
             cmd += ["-k", codec]
@@ -1481,9 +1481,9 @@ def _next_clip_path(
     return _next_numbered_path(out_dir, "Vice_Clip", ext, tag)
 
 
-def _next_session_path(out_dir: Path) -> Path:
-    """Return the next available Vice_Session_N.mp4 path in out_dir."""
-    return _next_numbered_path(out_dir, "Vice_Session", "mp4")
+def _next_session_path(out_dir: Path, ext: str = "mp4") -> Path:
+    """Return the next available Vice_Session_N.<ext> path in out_dir."""
+    return _next_numbered_path(out_dir, "Vice_Session", ext)
 
 
 # Without an explicit map, ffmpeg keeps only one audio stream per output, so
