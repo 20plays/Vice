@@ -7,11 +7,13 @@ import '@astryxdesign/core/astryx.css';
 import './styles/base.css';
 import './styles/shell.css';
 import './styles/home.css';
+import './styles/clips.css';
 
 import {VICE_THEMES, accentVars} from './theme/viceTheme';
 import {StoreProvider, useStore} from './state/store';
 import {AppFrame} from './components/AppFrame';
 import {Home} from './screens/Home';
+import {Clips} from './screens/Clips';
 
 function App() {
   const {state} = useStore();
@@ -46,9 +48,9 @@ function App() {
 /** The remaining screens land one per step. */
 function Screen({view}: {view: string}) {
   if (view === 'home') return <Home />;
+  if (view === 'clips') return <Clips />;
 
   const titles: Record<string, string> = {
-    clips: 'All Clips',
     editor: 'Editor',
     settings: 'Settings',
     about: 'About',

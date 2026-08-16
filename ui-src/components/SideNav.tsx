@@ -1,4 +1,7 @@
+import {useState} from 'react';
+
 import {useStore} from '../state/store';
+import {api} from '../lib/api';
 import {formatDuration} from '../lib/format';
 import type {ViewName} from '../lib/types';
 import {
@@ -21,8 +24,9 @@ const NAV: {view: ViewName; label: string; Icon: typeof IconHome}[] = [
 ];
 
 export function SideNav() {
-  const {state, dispatch} = useStore();
+  const {state, dispatch, notify} = useStore();
   const {view, currentPlaylistId, searchQuery, playlists, clips, config} = state;
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   const buffer = config?.recording?.buffer_duration as number | undefined;
 
@@ -83,7 +87,42 @@ export function SideNav() {
                 <button
                   type="button"
                   className="nav-item"
+                  data-drop-over={dropTarget === playlist.id || undefined}
                   aria-current={currentPlaylistId === playlist.id ? 'page' : undefined}
+                  onDragOver={e => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'copy';
+                    setDropTarget(playlist.id);
+                  }}
+                  onDragLeave={() => setDropTarget(null)}
+                  onDrop={e => {
+                    e.preventDefault();
+                    setDropTarget(null);
+                    const slug = e.dataTransfer.getData('text/plain');
+                    if (!slug) return;
+                    void api
+                      .addClipToPlaylist(playlist.id, slug)
+                      .then(result => {
+                        if (result.ok === false) {
+                          throw new Error(result.error || 'Could not add the clip');
+                        }
+                        notify({
+                          kind: 'info',
+                          title: `Added to ${playlist.name}`,
+                          tone: 'accent',
+                          holdMs: 3000,
+                        });
+                      })
+                      .catch((err: Error) =>
+                        notify({
+                          kind: 'error',
+                          title: 'Could not add the clip',
+                          detail: err.message,
+                          tone: 'error',
+                          holdMs: 7000,
+                        }),
+                      );
+                  }}
                   onClick={() =>
                     dispatch({type: 'setView', view: 'clips', playlistId: playlist.id})
                   }>

@@ -1,44 +1,75 @@
-import {useRef, useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
 
 import {formatBytes, formatDuration} from '../lib/format';
 import {clipTitle, type Clip} from '../lib/types';
 import {H264_SUPPORTED} from '../lib/env';
 
 /**
- * A clip in the grid. Hovering plays a muted preview, loaded lazily so a
- * library of hundreds does not fetch every file on render.
- *
- * An unreadable clip reports a placeholder 1920x1080 and a zero duration, so
- * neither is worth showing. It says what is actually wrong instead, and the
- * file is left alone on disk (#154).
+ * A video holds its decoded buffer for as long as a source is attached, so an
+ * element that carries src from the moment the card is built gets a media
+ * player whether or not it is ever hovered. The URL is parked until hover and
+ * dropped again once the pointer has been gone a moment. Waiting rather than
+ * releasing on the spot means sweeping across the grid, or coming straight
+ * back to the card you just left, does not pay to attach twice.
  */
+const PREVIEW_RELEASE_MS = 4000;
+
+export interface ClipActions {
+  onOpen?: (clip: Clip) => void;
+  onTrim?: (clip: Clip) => void;
+  onDelete?: (clip: Clip) => void;
+  onReveal?: (clip: Clip) => void;
+  onCopyFile?: (clip: Clip) => void;
+  onCopyLink?: (clip: Clip) => void;
+  onRename?: (clip: Clip, name: string) => Promise<void>;
+  onContextMenu?: (clip: Clip, at: {x: number; y: number}) => void;
+}
+
 export function ClipCard({
   clip,
   isNew,
-  onOpen,
+  actions = {},
+  draggable,
 }: {
   clip: Clip;
   isNew?: boolean;
-  onOpen?: (clip: Clip) => void;
+  actions?: ClipActions;
+  draggable?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const releaseTimer = useRef<number | undefined>(undefined);
   const [previewFailed, setPreviewFailed] = useState(false);
+  const [renaming, setRenaming] = useState(false);
 
   const broken = clip.unreadable;
   const canPreview = H264_SUPPORTED && !broken && !previewFailed && Boolean(clip.thumb_url);
 
-  const startPreview = () => {
+  useEffect(() => () => window.clearTimeout(releaseTimer.current), []);
+
+  const attachPreview = () => {
     const video = videoRef.current;
     if (!video || !canPreview) return;
-    if (!video.src) video.src = clip.video_url;
+    window.clearTimeout(releaseTimer.current);
+    if (!video.getAttribute('src')) video.src = clip.video_url;
     void video.play().catch(() => setPreviewFailed(true));
   };
 
-  const stopPreview = () => {
+  const releasePreview = () => {
     const video = videoRef.current;
     if (!video) return;
     video.pause();
-    video.currentTime = 0;
+    window.clearTimeout(releaseTimer.current);
+    releaseTimer.current = window.setTimeout(() => {
+      if (!video.getAttribute('src')) return;
+      video.removeAttribute('src');
+      // Dropping the attribute alone leaves the buffer in place; load() is
+      // what tears the player down.
+      try {
+        video.load();
+      } catch (err) {
+        console.debug('Releasing the preview buffer failed', err);
+      }
+    }, PREVIEW_RELEASE_MS);
   };
 
   const meta = [
@@ -58,13 +89,25 @@ export function ClipCard({
     .join(' · ');
 
   return (
-    <article className="clip-card" data-broken={broken || undefined}>
+    <article
+      className="clip-card"
+      data-broken={broken || undefined}
+      draggable={draggable && !renaming}
+      onDragStart={e => {
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('text/plain', clip.slug);
+      }}
+      onContextMenu={e => {
+        if (!actions.onContextMenu) return;
+        e.preventDefault();
+        actions.onContextMenu(clip, {x: e.clientX, y: e.clientY});
+      }}>
       <button
         type="button"
         className="clip-thumb"
-        onClick={() => onOpen?.(clip)}
-        onPointerEnter={startPreview}
-        onPointerLeave={stopPreview}
+        onClick={() => actions.onOpen?.(clip)}
+        onPointerEnter={attachPreview}
+        onPointerLeave={releasePreview}
         aria-label={`Open ${clipTitle(clip)}`}>
         {clip.thumb_url ? (
           <img src={clip.thumb_url} loading="lazy" alt="" draggable={false} />
@@ -98,12 +141,184 @@ export function ClipCard({
       </button>
 
       <div className="clip-body">
-        <h3 className="clip-name" title={clipTitle(clip)}>
-          {clipTitle(clip)}
-        </h3>
-        <p className="clip-meta">{broken ? clip.unreadable_reason || 'ffmpeg could not read this file' : meta}</p>
+        {renaming ? (
+          <RenameField
+            initial={clipTitle(clip)}
+            onCancel={() => setRenaming(false)}
+            onSubmit={async name => {
+              setRenaming(false);
+              await actions.onRename?.(clip, name);
+            }}
+          />
+        ) : (
+          <h3
+            className="clip-name"
+            title={`${clipTitle(clip)}, double-click to rename`}
+            onDoubleClick={() => actions.onRename && setRenaming(true)}>
+            {clipTitle(clip)}
+          </h3>
+        )}
+
+        <p className="clip-meta">{meta}</p>
+        {broken ? (
+          <p className="clip-broken-note">
+            {clip.unreadable_reason || 'ffmpeg could not read this file'}. The file is still on
+            disk.
+          </p>
+        ) : null}
         {clip.game ? <span className="clip-game">{clip.game}</span> : null}
+
+        {hasActions(actions) ? (
+          <div className="clip-actions">
+            {actions.onTrim ? (
+              <IconButton label="Trim" onClick={() => actions.onTrim?.(clip)}>
+                <ScissorsGlyph />
+              </IconButton>
+            ) : null}
+            {actions.onCopyFile ? (
+              <IconButton label="Copy video to clipboard" onClick={() => actions.onCopyFile?.(clip)}>
+                <ClipboardGlyph />
+              </IconButton>
+            ) : null}
+            {actions.onCopyLink ? (
+              <IconButton
+                label={clip.share_url ? 'Copy share link' : 'No share link yet'}
+                disabled={!clip.share_url}
+                onClick={() => actions.onCopyLink?.(clip)}>
+                <LinkGlyph />
+              </IconButton>
+            ) : null}
+            {actions.onReveal ? (
+              <IconButton label="Reveal in file manager" onClick={() => actions.onReveal?.(clip)}>
+                <FolderGlyph />
+              </IconButton>
+            ) : null}
+            {actions.onDelete ? (
+              <IconButton label="Delete" danger onClick={() => actions.onDelete?.(clip)}>
+                <TrashGlyph />
+              </IconButton>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </article>
   );
 }
+
+const hasActions = (a: ClipActions) =>
+  Boolean(a.onTrim || a.onCopyFile || a.onCopyLink || a.onReveal || a.onDelete);
+
+function RenameField({
+  initial,
+  onSubmit,
+  onCancel,
+}: {
+  initial: string;
+  onSubmit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const done = useRef(false);
+
+  const submit = () => {
+    if (done.current) return;
+    done.current = true;
+    const next = value.trim();
+    if (!next || next === initial) onCancel();
+    else onSubmit(next);
+  };
+
+  return (
+    <input
+      className="clip-rename"
+      value={value}
+      autoFocus
+      aria-label="Clip name"
+      onChange={e => setValue(e.target.value)}
+      onFocus={e => e.target.select()}
+      onBlur={submit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          submit();
+        }
+        if (e.key === 'Escape') {
+          done.current = true;
+          onCancel();
+        }
+      }}
+    />
+  );
+}
+
+function IconButton({
+  label,
+  onClick,
+  danger,
+  disabled,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="clip-icon-btn"
+      data-danger={danger || undefined}
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={e => {
+        e.stopPropagation();
+        onClick();
+      }}>
+      {children}
+    </button>
+  );
+}
+
+const g = {
+  width: 13,
+  height: 13,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  'aria-hidden': true,
+};
+
+const ScissorsGlyph = () => (
+  <svg {...g}>
+    <circle cx="6" cy="7" r="3" />
+    <circle cx="6" cy="17" r="3" />
+    <path d="M20 5 9 15M20 19 9 9" />
+  </svg>
+);
+const ClipboardGlyph = () => (
+  <svg {...g}>
+    <rect x="8" y="8" width="13" height="13" rx="2" />
+    <path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2" />
+  </svg>
+);
+const LinkGlyph = () => (
+  <svg {...g}>
+    <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" />
+    <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />
+  </svg>
+);
+const FolderGlyph = () => (
+  <svg {...g}>
+    <path d="M3 7h6l2 2h10v10H3z" />
+  </svg>
+);
+const TrashGlyph = () => (
+  <svg {...g}>
+    <path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" />
+  </svg>
+);

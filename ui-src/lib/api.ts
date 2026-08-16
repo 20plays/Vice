@@ -77,10 +77,18 @@ export const api = {
   triggerClip: () => post<void>('/api/trigger'),
 
   playlists: async () => (await request<{playlists: Playlist[]}>('/api/playlists')).playlists,
-  createPlaylist: (body: unknown) => post<Playlist>('/api/playlists', body),
-  updatePlaylist: (id: string, body: unknown) => post<Playlist>(`/api/playlists/${id}`, body),
+  createPlaylist: (body: unknown) =>
+    post<{ok?: boolean; error?: string; playlist: Playlist}>('/api/playlists', body),
+  /** Edits are a PATCH; only create and membership are POSTs. */
+  updatePlaylist: (id: string, body: unknown) =>
+    request<{ok?: boolean; error?: string; playlist: Playlist}>(`/api/playlists/${id}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    }),
   deletePlaylist: (id: string) => request<void>(`/api/playlists/${id}`, {method: 'DELETE'}),
-  setPlaylistClip: (id: string, body: unknown) => post<Playlist>(`/api/playlists/${id}/clips`, body),
+  addClipToPlaylist: (id: string, slug: string) =>
+    post<{ok?: boolean; error?: string}>(`/api/playlists/${id}/clips`, {slug}),
 
   displays: (backend?: string) =>
     request<{backend: string; displays: unknown[]; warning: string | null}>(
