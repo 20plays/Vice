@@ -104,6 +104,7 @@ type Action =
   | {type: 'setSearch'; query: string}
   | {type: 'setAccent'; accent: AccentName}
   | {type: 'setConfig'; config: Config}
+  | {type: 'mergeConfig'; patch: Record<string, Record<string, unknown>>}
   | {type: 'setClips'; clips: Clip[]}
   | {type: 'setPlaylists'; playlists: Playlist[]}
   | {type: 'event'; event: Omit<IslandEvent, 'id'>}
@@ -154,6 +155,15 @@ function reduce(state: State, action: Action): State {
 
     case 'setConfig':
       return {...state, config: action.config};
+
+    case 'mergeConfig': {
+      if (!state.config) return state;
+      const config = {...state.config} as unknown as Record<string, Record<string, unknown>>;
+      for (const [section, values] of Object.entries(action.patch)) {
+        config[section] = {...(config[section] ?? {}), ...values};
+      }
+      return {...state, config: config as unknown as Config};
+    }
 
     case 'setClips':
       return {...state, clips: action.clips};
@@ -325,6 +335,9 @@ interface Store {
   refreshClips: () => Promise<void>;
   refreshPlaylists: () => Promise<void>;
   notify: (event: Omit<IslandEvent, 'id'>) => void;
+  saveConfig: (
+    patch: Record<string, Record<string, unknown>>,
+  ) => Promise<{applied?: boolean; warning?: string; restart_required?: boolean}>;
 }
 
 const StoreContext = createContext<Store | null>(null);
@@ -399,6 +412,23 @@ export function StoreProvider({children}: {children: ReactNode}) {
     dispatch({type: 'event', event});
   }, []);
 
+  /**
+   * Persist a partial config and merge it locally.
+   *
+   * The daemon answers with a result rather than the new config, so the patch
+   * we sent is what gets merged, matching what the old UI did. Throws on
+   * failure so callers can revert their own control.
+   */
+  const saveConfig = useCallback(
+    async (patch: Record<string, Record<string, unknown>>) => {
+      const result = await api.saveConfig(patch);
+      if (result.ok === false) throw new Error(result.error || 'The change was not saved');
+      dispatch({type: 'mergeConfig', patch});
+      return result;
+    },
+    [],
+  );
+
   const visibleClips = useMemo(() => {
     const query = state.searchQuery.trim().toLowerCase();
     const playlist = state.currentPlaylistId
@@ -423,8 +453,17 @@ export function StoreProvider({children}: {children: ReactNode}) {
   );
 
   const value = useMemo<Store>(
-    () => ({state, dispatch, visibleClips, hotkey, refreshClips, refreshPlaylists, notify}),
-    [state, visibleClips, hotkey, refreshClips, refreshPlaylists, notify],
+    () => ({
+      state,
+      dispatch,
+      visibleClips,
+      hotkey,
+      refreshClips,
+      refreshPlaylists,
+      notify,
+      saveConfig,
+    }),
+    [state, visibleClips, hotkey, refreshClips, refreshPlaylists, notify, saveConfig],
   );
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;

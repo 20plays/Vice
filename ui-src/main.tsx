@@ -6,10 +6,12 @@ import '@astryxdesign/core/reset.css';
 import '@astryxdesign/core/astryx.css';
 import './styles/base.css';
 import './styles/shell.css';
+import './styles/home.css';
 
 import {VICE_THEMES, accentVars} from './theme/viceTheme';
 import {StoreProvider, useStore} from './state/store';
 import {AppFrame} from './components/AppFrame';
+import {Home} from './screens/Home';
 
 function App() {
   const {state} = useStore();
@@ -41,10 +43,11 @@ function App() {
   );
 }
 
-/** Screens land one per step. Until then the shell is what is being built. */
+/** The remaining screens land one per step. */
 function Screen({view}: {view: string}) {
+  if (view === 'home') return <Home />;
+
   const titles: Record<string, string> = {
-    home: 'Home',
     clips: 'All Clips',
     editor: 'Editor',
     settings: 'Settings',

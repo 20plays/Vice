@@ -32,7 +32,19 @@ export const api = {
   status: () => request<Status>('/api/status'),
 
   getConfig: () => request<Config>('/api/config'),
-  saveConfig: (partial: Record<string, unknown>) => post<Config>('/api/config', partial),
+  /**
+   * Returns a result, not the config: `applied` is false when the change was
+   * stored but could not take effect on the running recorder, and
+   * `restart_required` means the daemon needs a restart for it to land.
+   */
+  saveConfig: (partial: Record<string, unknown>) =>
+    post<{
+      ok?: boolean;
+      error?: string;
+      applied?: boolean;
+      warning?: string;
+      restart_required?: boolean;
+    }>('/api/config', partial),
 
   /** Small cross-session UI flags. Server-side because native localStorage is unreliable. */
   getAppState: () => request<Record<string, unknown>>('/api/app-state'),
