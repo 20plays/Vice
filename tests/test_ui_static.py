@@ -578,8 +578,21 @@ class NoEmDashesAnywhereTests(unittest.TestCase):
     than remembered. It kept creeping back into log lines and comments where
     nobody was looking."""
 
-    SHIPPED_SUFFIXES = {".py", ".js", ".css", ".html", ".sh", ".md", ".toml", ".service", ".desktop"}
+    SHIPPED_SUFFIXES = {
+        ".py", ".js", ".css", ".html", ".sh", ".md", ".toml", ".service", ".desktop",
+        # The UI source is TypeScript now, and the rule applies to it just the
+        # same. Without these the guard would quietly stop covering the UI.
+        ".ts", ".tsx", ".mts", ".mjs",
+    }
     SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules"}
+
+    # Built by `npm run build` from ui-src, and minified library code inside it
+    # carries em-dashes we do not control. The rule is about what we write, so
+    # the generated bundle is checked at its source instead.
+    GENERATED = {
+        REPO_ROOT / "vice" / "ui" / "scripts" / "app.js",
+        REPO_ROOT / "vice" / "ui" / "styles" / "app.css",
+    }
 
     def _shipped_files(self):
         for path in REPO_ROOT.rglob("*"):
@@ -589,6 +602,8 @@ class NoEmDashesAnywhereTests(unittest.TestCase):
                 continue
             # Not committed; it is the local maintenance guide.
             if path.name == "CLAUDE.md":
+                continue
+            if path in self.GENERATED:
                 continue
             if path.suffix in self.SHIPPED_SUFFIXES or path.name in {"install.sh", "PKGBUILD", ".SRCINFO"}:
                 yield path

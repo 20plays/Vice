@@ -18,6 +18,9 @@ env/
 *.AppImage
 AppDir/
 
+# Node tooling for the UI design system
+node_modules/
+
 # Vice runtime
 /tmp/vice/
 

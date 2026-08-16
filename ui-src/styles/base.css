@@ -1,0 +1,105 @@
+/* Local fonts. Nothing is fetched from a CDN: the daemon is expected to work
+   with no network at all. Figtree carries the UI; Geist, Inter and JetBrains
+   Mono stay because the editor's text tool offers all three to the user. */
+@font-face {
+  font-family: 'Figtree';
+  font-weight: 100 900;
+  font-style: normal;
+  src: url('/fonts/Figtree.woff2') format('woff2-variations');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  font-weight: 100 900;
+  font-style: normal;
+  src: url('/fonts/Geist.woff2') format('woff2-variations');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Inter';
+  font-weight: 100 900;
+  font-style: normal;
+  src: url('/fonts/Inter.woff2') format('woff2-variations');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-weight: 100 900;
+  font-style: normal;
+  src: url('/fonts/JetBrainsMono.woff2') format('woff2-variations');
+  font-display: swap;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background-body);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-body);
+  overflow: hidden;
+}
+
+/* Boot cover. Lives in index.html so it paints before the bundle parses, and is
+   removed once the first screen has real data to show. */
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: var(--spacing-3);
+  background: var(--color-background-body);
+  color: var(--color-text-primary);
+  transition: opacity var(--duration-medium) var(--ease-standard);
+}
+
+#boot.boot-done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.boot-word {
+  font-family: var(--font-family-heading);
+  font-size: var(--text-heading-3-size);
+  letter-spacing: 0.02em;
+}
+
+.boot-mark {
+  color: var(--color-accent);
+}
+
+/* The ambient wash. What is left of the old drifting glow orbs: one static,
+   accent-derived radial that sits behind everything and never animates, so
+   there is nothing here for the effects probe to measure. */
+.vice-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--vice-ambient) 0%, transparent 60%),
+    var(--color-background-body);
+  opacity: 0.55;
+}
+
+.vice-app {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
