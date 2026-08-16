@@ -1,74 +1,67 @@
-import {StrictMode, useState} from 'react';
+import {StrictMode, useEffect} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Theme} from '@astryxdesign/core/theme';
 
 import '@astryxdesign/core/reset.css';
 import '@astryxdesign/core/astryx.css';
 import './styles/base.css';
+import './styles/shell.css';
 
-import {ACCENT_NAMES, DEFAULT_ACCENT, type AccentName} from './theme/accents';
 import {VICE_THEMES, accentVars} from './theme/viceTheme';
-
-const ACCENT_KEY = 'vice-theme';
-
-function storedAccent(): AccentName {
-  const saved = localStorage.getItem(ACCENT_KEY);
-  return ACCENT_NAMES.includes(saved as AccentName) ? (saved as AccentName) : DEFAULT_ACCENT;
-}
+import {StoreProvider, useStore} from './state/store';
+import {AppFrame} from './components/AppFrame';
 
 function App() {
-  const [accent, setAccent] = useState<AccentName>(storedAccent);
+  const {state} = useStore();
+  const {accent, ready, view} = state;
+
+  // The boot cover is in index.html so it paints before this bundle parses.
+  // It goes once there is real data behind it, not merely once React mounted.
+  useEffect(() => {
+    if (!ready) return;
+    const boot = document.getElementById('boot');
+    if (!boot) return;
+    boot.classList.add('boot-done');
+    const remove = () => boot.remove();
+    boot.addEventListener('transitionend', remove, {once: true});
+    // A missed transitionend must not leave an invisible cover over the app.
+    const failsafe = window.setTimeout(remove, 1200);
+    return () => window.clearTimeout(failsafe);
+  }, [ready]);
 
   return (
     <Theme theme={VICE_THEMES[accent]} mode="dark">
       <div className="vice-ambient" style={accentVars(accent)} aria-hidden="true" />
       <div className="vice-app" style={accentVars(accent)}>
-        <ThemeProof accent={accent} onPick={setAccent} />
+        <AppFrame>
+          <Screen view={view} />
+        </AppFrame>
       </div>
     </Theme>
   );
 }
 
-/** Temporary. Replaced by the real app shell in step 2. */
-function ThemeProof({accent, onPick}: {accent: AccentName; onPick: (a: AccentName) => void}) {
+/** Screens land one per step. Until then the shell is what is being built. */
+function Screen({view}: {view: string}) {
+  const titles: Record<string, string> = {
+    home: 'Home',
+    clips: 'All Clips',
+    editor: 'Editor',
+    settings: 'Settings',
+    about: 'About',
+  };
   return (
-    <div style={{padding: 'var(--spacing-6)', display: 'grid', gap: 'var(--spacing-4)'}}>
-      <h1 style={{font: 'var(--text-heading-1)', margin: 0}}>Vice</h1>
-      <p style={{color: 'var(--color-text-secondary)', margin: 0}}>
-        Theme pipeline running. Accent: {accent}
-      </p>
-      <div style={{display: 'flex', gap: 'var(--spacing-2)'}}>
-        {ACCENT_NAMES.map(name => (
-          <button
-            key={name}
-            type="button"
-            onClick={() => onPick(name)}
-            aria-label={name}
-            aria-pressed={name === accent}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 'var(--radius-full)',
-              background: name === accent ? 'var(--color-accent)' : 'var(--color-background-surface)',
-              border: '1px solid var(--color-border-emphasized)',
-              cursor: 'pointer',
-            }}
-          />
-        ))}
-      </div>
-    </div>
+    <section className="screen-placeholder">
+      <h1>{titles[view] ?? view}</h1>
+      <p>This screen is next up in the rebuild.</p>
+    </section>
   );
 }
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <StoreProvider>
+      <App />
+    </StoreProvider>
   </StrictMode>,
 );
-
-// Fades rather than cuts, and removes the node so it can never trap clicks.
-const boot = document.getElementById('boot');
-if (boot) {
-  boot.classList.add('boot-done');
-  boot.addEventListener('transitionend', () => boot.remove(), {once: true});
-}
