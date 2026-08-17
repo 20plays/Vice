@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from 'react';
+import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 
 import {api} from '../lib/api';
 import {onWsMessage} from '../lib/ws';
@@ -608,7 +608,27 @@ function ExportModal({
 
 function AddTrackButton({onAdd}: {onAdd: (type: 'video' | 'audio') => void}) {
   const [open, setOpen] = useState(false);
+  const [at, setAt] = useState({x: 0, y: 0});
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // The menu opens upward out of a panel with overflow: hidden, so it was
+  // being clipped rather than stacked underneath. Fixed positioning takes it
+  // out of that box entirely.
+  useLayoutEffect(() => {
+    const node = menuRef.current;
+    const button = ref.current?.querySelector('button');
+    if (!open || !node || !button) return;
+    const r = button.getBoundingClientRect();
+    // offsetWidth/offsetHeight, not a client rect: the menu plays a scale()
+    // entry animation and a live rect reports the transformed box.
+    const w = node.offsetWidth;
+    const h = node.offsetHeight;
+    setAt({
+      x: Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)),
+      y: Math.max(8, r.top - h - 6),
+    });
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -628,7 +648,7 @@ function AddTrackButton({onAdd}: {onAdd: (type: 'video' | 'audio') => void}) {
         Track
       </button>
       {open ? (
-        <div className="ed-addtrack-menu" role="menu">
+        <div className="ed-addtrack-menu" role="menu" ref={menuRef} style={{left: at.x, top: at.y}}>
           <button
             type="button"
             onClick={() => {

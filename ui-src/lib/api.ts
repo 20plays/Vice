@@ -94,6 +94,10 @@ export const api = {
   deletePlaylist: (id: string) => request<void>(`/api/playlists/${id}`, {method: 'DELETE'}),
   addClipToPlaylist: (id: string, slug: string) =>
     post<{ok?: boolean; error?: string}>(`/api/playlists/${id}/clips`, {slug}),
+  removeClipFromPlaylist: (id: string, slug: string) =>
+    request<{ok?: boolean; error?: string}>(`/api/playlists/${id}/clips/${slug}`, {
+      method: 'DELETE',
+    }),
 
   displays: (backend?: string) =>
     request<{backend: string; displays: unknown[]; warning: string | null}>(

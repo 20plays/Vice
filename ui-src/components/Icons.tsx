@@ -129,3 +129,17 @@ export const IconDownload = ({size = 12, className}: IconProps) => (
     <path d="M12 15V3" />
   </svg>
 );
+
+export const IconMore = ({size = 16, className}: IconProps) => (
+  <svg {...base(size)} className={className} aria-hidden="true">
+    <circle cx="12" cy="5" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="19" r="1.4" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+export const IconPlus = ({size = 14, className}: IconProps) => (
+  <svg {...base(size)} className={className} aria-hidden="true">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);

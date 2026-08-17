@@ -1,7 +1,8 @@
 import {useMemo, useState} from 'react';
 
 import {useStore} from '../state/store';
-import {usePlayback} from '../state/playback';
+import {useClipActions} from '../state/clipActions';
+import {usePlaylistDropTarget} from '../lib/clipDrag';
 import {api} from '../lib/api';
 import {copyToClipboard} from '../lib/clipboard';
 import {formatDuration} from '../lib/format';
@@ -32,6 +33,7 @@ export function Home() {
   const {state, dispatch, hotkey, saveConfig, notify} = useStore();
   const {clips, playlists, config, tunnelUrl, recentNew, status} = state;
 
+  const {actions, overlays} = useClipActions();
   const [busy, setBusy] = useState<string | null>(null);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
   const [restartNeeded, setRestartNeeded] = useState(false);
@@ -230,6 +232,7 @@ export function Home() {
         action={{label: 'See all', onClick: () => dispatch({type: 'setView', view: 'clips', playlistId: null})}}
         clips={recent}
         recentNew={recentNew}
+        actions={actions}
         empty={`No clips yet. Press ${hotkey} to start your reel.`}
       />
 
@@ -240,34 +243,29 @@ export function Home() {
           </div>
           <div className="playlist-row">
             {playlists.map(playlist => (
-              <button
+              <PlaylistChip
                 key={playlist.id}
-                type="button"
-                className="playlist-chip"
-                style={
-                  playlist.color1
-                    ? ({'--chip': playlist.color1} as React.CSSProperties)
-                    : undefined
+                playlist={playlist}
+                onOpen={() => dispatch({type: 'setView', view: 'clips', playlistId: playlist.id})}
+                onDone={(message, tone) =>
+                  notify({
+                    kind: tone === 'error' ? 'error' : 'info',
+                    title: message,
+                    tone,
+                    holdMs: tone === 'error' ? 7000 : 3000,
+                  })
                 }
-                onClick={() => dispatch({type: 'setView', view: 'clips', playlistId: playlist.id})}>
-                <span className="playlist-chip-mark" aria-hidden="true">
-                  {playlist.emoji || <IconPlaylist size={15} />}
-                </span>
-                <span className="playlist-chip-text">
-                  <b>{playlist.name}</b>
-                  <span>
-                    {playlist.clip_slugs.length} clip{playlist.clip_slugs.length === 1 ? '' : 's'}
-                  </span>
-                </span>
-              </button>
+              />
             ))}
           </div>
         </section>
       ) : null}
 
       {mostViewed.length > 0 ? (
-        <ClipRow title="Most viewed" clips={mostViewed} recentNew={recentNew} />
+        <ClipRow title="Most viewed" clips={mostViewed} recentNew={recentNew} actions={actions} />
       ) : null}
+
+      {overlays}
 
       <Modal
         open={wfMicPrompt}
@@ -324,20 +322,55 @@ export function Home() {
   );
 }
 
+/** A playlist tile that also accepts a clip dropped onto it. */
+function PlaylistChip({
+  playlist,
+  onOpen,
+  onDone,
+}: {
+  playlist: import('../lib/types').Playlist;
+  onOpen: () => void;
+  onDone: (message: string, tone: 'accent' | 'error') => void;
+}) {
+  const drop = usePlaylistDropTarget(playlist, onDone);
+  const count = playlist.clip_slugs.length;
+  return (
+    <button
+      type="button"
+      className="playlist-chip"
+      data-drop-over={drop.over || undefined}
+      data-received={drop.caught || undefined}
+      style={playlist.color1 ? ({'--chip': playlist.color1} as React.CSSProperties) : undefined}
+      onClick={onOpen}
+      {...drop.props}>
+      <span className="playlist-chip-mark" aria-hidden="true">
+        {playlist.emoji || <IconPlaylist size={15} />}
+      </span>
+      <span className="playlist-chip-text">
+        <b>{playlist.name}</b>
+        <span>
+          {count} clip{count === 1 ? '' : 's'}
+        </span>
+      </span>
+    </button>
+  );
+}
+
 function ClipRow({
   title,
   clips,
   recentNew,
+  actions,
   action,
   empty,
 }: {
   title: string;
   clips: import('../lib/types').Clip[];
   recentNew: string[];
+  actions: import('../components/ClipCard').ClipActions;
   action?: {label: string; onClick: () => void};
   empty?: string;
 }) {
-  const {openViewer} = usePlayback();
   return (
     <section className="home-section">
       <div className="home-section-head">
@@ -356,8 +389,9 @@ function ClipRow({
             <ClipCard
               key={clip.slug}
               clip={clip}
+              draggable
               isNew={recentNew.includes(clip.slug)}
-              actions={{onOpen: c => openViewer(c.slug)}}
+              actions={actions}
             />
           ))}
         </div>

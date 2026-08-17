@@ -2,7 +2,9 @@ import {useState} from 'react';
 
 import {useStore} from '../state/store';
 import {api} from '../lib/api';
+import {usePlaylistDropTarget} from '../lib/clipDrag';
 import {formatDuration} from '../lib/format';
+import {PlaylistModal, type PlaylistDraft} from './PlaylistModal';
 import type {ViewName} from '../lib/types';
 import {
   IconAbout,
@@ -13,6 +15,7 @@ import {
   IconHome,
   IconMark,
   IconPlaylist,
+  IconPlus,
   IconSearch,
   IconSettings,
 } from './Icons';
@@ -32,9 +35,9 @@ export function SideNav({
   onShowTutorial: () => void;
   onShowUpdate: () => void;
 }) {
-  const {state, dispatch, notify} = useStore();
+  const {state, dispatch, notify, refreshPlaylists} = useStore();
+  const [creating, setCreating] = useState(false);
   const {view, currentPlaylistId, searchQuery, playlists, clips, config} = state;
-  const [dropTarget, setDropTarget] = useState<string | null>(null);
 
   const buffer = config?.recording?.buffer_duration as number | undefined;
 
@@ -86,65 +89,39 @@ export function SideNav({
         })}
       </ul>
 
+      <div className="sidenav-heading">
+        <span>Playlists</span>
+        <button
+          type="button"
+          className="sidenav-add"
+          title="New playlist"
+          aria-label="New playlist"
+          onClick={() => setCreating(true)}>
+          <IconPlus size={13} />
+        </button>
+      </div>
       {playlists.length > 0 ? (
-        <>
-          <p className="sidenav-heading">Playlists</p>
-          <ul className="sidenav-list sidenav-playlists">
-            {playlists.map(playlist => (
-              <li key={playlist.id}>
-                <button
-                  type="button"
-                  className="nav-item"
-                  data-drop-over={dropTarget === playlist.id || undefined}
-                  aria-current={currentPlaylistId === playlist.id ? 'page' : undefined}
-                  onDragOver={e => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = 'copy';
-                    setDropTarget(playlist.id);
-                  }}
-                  onDragLeave={() => setDropTarget(null)}
-                  onDrop={e => {
-                    e.preventDefault();
-                    setDropTarget(null);
-                    const slug = e.dataTransfer.getData('text/plain');
-                    if (!slug) return;
-                    void api
-                      .addClipToPlaylist(playlist.id, slug)
-                      .then(result => {
-                        if (result.ok === false) {
-                          throw new Error(result.error || 'Could not add the clip');
-                        }
-                        notify({
-                          kind: 'info',
-                          title: `Added to ${playlist.name}`,
-                          tone: 'accent',
-                          holdMs: 3000,
-                        });
-                      })
-                      .catch((err: Error) =>
-                        notify({
-                          kind: 'error',
-                          title: 'Could not add the clip',
-                          detail: err.message,
-                          tone: 'error',
-                          holdMs: 7000,
-                        }),
-                      );
-                  }}
-                  onClick={() =>
-                    dispatch({type: 'setView', view: 'clips', playlistId: playlist.id})
-                  }>
-                  <span className="playlist-mark" aria-hidden="true">
-                    {playlist.emoji || <IconPlaylist size={14} />}
-                  </span>
-                  <span className="nav-label">{playlist.name}</span>
-                  <span className="nav-count">{playlist.clip_slugs?.length ?? 0}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : null}
+        <ul className="sidenav-list sidenav-playlists">
+          {playlists.map(playlist => (
+            <PlaylistRow
+              key={playlist.id}
+              playlist={playlist}
+              active={currentPlaylistId === playlist.id}
+              onOpen={() => dispatch({type: 'setView', view: 'clips', playlistId: playlist.id})}
+              onDone={(message, tone) =>
+                notify({
+                  kind: tone === 'error' ? 'error' : 'info',
+                  title: message,
+                  tone,
+                  holdMs: tone === 'error' ? 7000 : 3000,
+                })
+              }
+            />
+          ))}
+        </ul>
+      ) : (
+        <p className="sidenav-empty">Drag a clip here to start one.</p>
+      )}
 
       <div className="sidenav-foot">
         {state.update?.version ? (
@@ -174,6 +151,57 @@ export function SideNav({
           </button>
         </div>
       </div>
+      <PlaylistModal
+        open={creating}
+        editing={null}
+        onClose={() => setCreating(false)}
+        onSubmit={async (draft: PlaylistDraft) => {
+          const result = await api.createPlaylist(draft);
+          if (result.ok === false) throw new Error(result.error || 'Could not create the playlist');
+          await refreshPlaylists();
+          dispatch({type: 'setView', view: 'clips', playlistId: result.playlist.id});
+          notify({
+            kind: 'info',
+            title: `Playlist "${draft.name}" created`,
+            tone: 'accent',
+            holdMs: 3500,
+          });
+          setCreating(false);
+        }}
+      />
     </nav>
+  );
+}
+
+/** One playlist in the rail, which doubles as a drop target for clips. */
+function PlaylistRow({
+  playlist,
+  active,
+  onOpen,
+  onDone,
+}: {
+  playlist: import('../lib/types').Playlist;
+  active: boolean;
+  onOpen: () => void;
+  onDone: (message: string, tone: 'accent' | 'error') => void;
+}) {
+  const drop = usePlaylistDropTarget(playlist, onDone);
+  return (
+    <li>
+      <button
+        type="button"
+        className="nav-item"
+        data-drop-over={drop.over || undefined}
+        data-received={drop.caught || undefined}
+        aria-current={active ? 'page' : undefined}
+        onClick={onOpen}
+        {...drop.props}>
+        <span className="playlist-mark" aria-hidden="true">
+          {playlist.emoji || <IconPlaylist size={14} />}
+        </span>
+        <span className="nav-label">{playlist.name}</span>
+        <span className="nav-count">{playlist.clip_slugs?.length ?? 0}</span>
+      </button>
+    </li>
   );
 }

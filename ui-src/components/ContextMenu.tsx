@@ -2,9 +2,13 @@ import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 
 export interface MenuItem {
   id: string;
-  label: string;
+  label?: string;
   mark?: string;
-  onSelect: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  /** A rule between groups. Carries no label and cannot be chosen. */
+  separator?: boolean;
+  onSelect?: () => void;
 }
 
 /**
@@ -58,26 +62,34 @@ export function ContextMenu({
     };
   }, [onClose]);
 
+  const choosable = items.filter(item => !item.separator);
+
   return (
     <div className="ctx-menu" ref={ref} style={{left: pos.x, top: pos.y}} role="menu">
       <p className="ctx-heading">{heading}</p>
-      {items.length === 0 ? (
+      {choosable.length === 0 ? (
         <p className="ctx-empty">{emptyLabel}</p>
       ) : (
-        items.map(item => (
-          <button
-            key={item.id}
-            type="button"
-            className="ctx-item"
-            role="menuitem"
-            onClick={() => {
-              item.onSelect();
-              onClose();
-            }}>
-            {item.mark ? <span className="ctx-mark">{item.mark}</span> : null}
-            <span>{item.label}</span>
-          </button>
-        ))
+        items.map(item =>
+          item.separator ? (
+            <div className="ctx-sep" key={item.id} role="separator" />
+          ) : (
+            <button
+              key={item.id}
+              type="button"
+              className="ctx-item"
+              data-danger={item.danger || undefined}
+              role="menuitem"
+              disabled={item.disabled}
+              onClick={() => {
+                item.onSelect?.();
+                onClose();
+              }}>
+              <span className="ctx-mark">{item.mark ?? ''}</span>
+              <span>{item.label}</span>
+            </button>
+          ),
+        )
       )}
     </div>
   );

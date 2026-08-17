@@ -75,7 +75,8 @@ kbd {
   padding: 0 var(--spacing-4);
   border: none;
   border-radius: var(--radius-container);
-  background: var(--color-background-surface);
+  background: var(--raised);
+  box-shadow: var(--raised-edge);
   color: var(--color-text-primary);
   font: inherit;
   text-align: left;
@@ -256,15 +257,18 @@ kbd {
   flex-direction: column;
   border-radius: var(--radius-container);
   overflow: hidden;
-  background: var(--color-background-surface);
+  background: var(--raised);
+  box-shadow: var(--raised-edge);
   transition:
     transform var(--duration-medium) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard);
+    box-shadow var(--duration-medium) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard);
 }
 
 .clip-card:hover {
   transform: translateY(-4px);
-  background: var(--color-accent-muted);
+  background: var(--raised-hover);
+  box-shadow: var(--raised-edge-hover);
 }
 
 .clip-thumb {
@@ -352,8 +356,8 @@ kbd {
 .clip-body {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  padding: var(--spacing-3);
+  gap: 4px;
+  padding: var(--spacing-3) var(--spacing-3) 10px;
 }
 
 .clip-name {
@@ -400,7 +404,8 @@ kbd {
   padding: var(--spacing-3);
   border: none;
   border-radius: var(--radius-container);
-  background: var(--color-background-surface);
+  background: var(--raised);
+  box-shadow: var(--raised-edge);
   color: var(--color-text-primary);
   font: inherit;
   text-align: left;

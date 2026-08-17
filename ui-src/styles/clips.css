@@ -72,21 +72,7 @@
 .clip-actions {
   display: flex;
   gap: 4px;
-  margin-top: var(--spacing-2);
-  opacity: 0;
-  transition: opacity var(--duration-fast) var(--ease-standard);
-}
-
-.clip-card:hover .clip-actions,
-.clip-card:focus-within .clip-actions {
-  opacity: 1;
-}
-
-/* Never hide an action behind hover on a touch or keyboard-only pass. */
-@media (hover: none) {
-  .clip-actions {
-    opacity: 1;
-  }
+  margin-top: 2px;
 }
 
 .clip-icon-btn {
@@ -230,7 +216,37 @@
 
 .ctx-mark {
   width: 18px;
+  flex: none;
   text-align: center;
+}
+
+.ctx-item[data-danger] {
+  color: var(--color-error);
+}
+
+.ctx-item[data-danger]:hover:not(:disabled) {
+  background: var(--color-error);
+  color: var(--color-on-error);
+}
+
+.ctx-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ctx-sep {
+  height: 1px;
+  margin: 5px var(--spacing-2);
+  background: var(--color-border);
+}
+
+/* An icon-only button keeps the pill shape rather than stretching to the
+   width the label would have taken. */
+.btn-icon-only {
+  width: 38px;
+  padding: 10px 0;
+  display: grid;
+  place-items: center;
 }
 
 /* ── playlist editor ────────────────────────────────────────────── */

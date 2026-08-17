@@ -107,7 +107,8 @@
 .settings-card {
   padding: var(--spacing-4) var(--spacing-5) var(--spacing-2);
   border-radius: var(--radius-container);
-  background: var(--color-background-surface);
+  background: var(--raised);
+  box-shadow: var(--raised-edge);
   scroll-margin-top: var(--spacing-3);
 }
 

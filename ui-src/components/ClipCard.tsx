@@ -1,5 +1,6 @@
 import {useEffect, useRef, useState} from 'react';
 
+import {endClipDrag, startClipDrag} from '../lib/clipDrag';
 import {formatBytes, formatDuration} from '../lib/format';
 import {clipTitle, type Clip} from '../lib/types';
 import {H264_SUPPORTED} from '../lib/env';
@@ -23,6 +24,9 @@ export interface ClipActions {
   onCopyLink?: (clip: Clip) => void;
   onRename?: (clip: Clip, name: string) => Promise<void>;
   onContextMenu?: (clip: Clip, at: {x: number; y: number}) => void;
+  /** Set by the context menu to open this card's rename field. */
+  renamingSlug?: string | null;
+  onRenameDone?: () => void;
 }
 
 export function ClipCard({
@@ -39,7 +43,13 @@ export function ClipCard({
   const videoRef = useRef<HTMLVideoElement>(null);
   const releaseTimer = useRef<number | undefined>(undefined);
   const [previewFailed, setPreviewFailed] = useState(false);
-  const [renaming, setRenaming] = useState(false);
+  const [renamingHere, setRenamingHere] = useState(false);
+  const renaming = renamingHere || actions.renamingSlug === clip.slug;
+
+  const stopRenaming = () => {
+    setRenamingHere(false);
+    actions.onRenameDone?.();
+  };
 
   const broken = clip.unreadable;
   const canPreview = H264_SUPPORTED && !broken && !previewFailed && Boolean(clip.thumb_url);
@@ -93,10 +103,8 @@ export function ClipCard({
       className="clip-card"
       data-broken={broken || undefined}
       draggable={draggable && !renaming}
-      onDragStart={e => {
-        e.dataTransfer.effectAllowed = 'copy';
-        e.dataTransfer.setData('text/plain', clip.slug);
-      }}
+      onDragStart={e => startClipDrag(e, clip)}
+      onDragEnd={endClipDrag}
       onContextMenu={e => {
         if (!actions.onContextMenu) return;
         e.preventDefault();
@@ -144,9 +152,9 @@ export function ClipCard({
         {renaming ? (
           <RenameField
             initial={clipTitle(clip)}
-            onCancel={() => setRenaming(false)}
+            onCancel={stopRenaming}
             onSubmit={async name => {
-              setRenaming(false);
+              stopRenaming();
               await actions.onRename?.(clip, name);
             }}
           />
@@ -154,7 +162,7 @@ export function ClipCard({
           <h3
             className="clip-name"
             title={`${clipTitle(clip)}, double-click to rename`}
-            onDoubleClick={() => actions.onRename && setRenaming(true)}>
+            onDoubleClick={() => actions.onRename && setRenamingHere(true)}>
             {clipTitle(clip)}
           </h3>
         )}

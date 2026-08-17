@@ -5,6 +5,7 @@ import {IS_NATIVE, keepRunning, quitVice} from '../lib/env';
 import {Tutorial} from './Tutorial';
 import {UpdateNotice} from './UpdateNotice';
 import {IconMinimize, IconPower} from './Icons';
+import {useStore} from '../state/store';
 import {SideNav} from './SideNav';
 import {StatusIsland} from './StatusIsland';
 import {Banners} from './Banners';
@@ -21,6 +22,9 @@ const MELT = 32;
  * longer a wide side for the curve to melt into.
  */
 export function AppFrame({children}: {children: ReactNode}) {
+  const {state} = useStore();
+  // Both of these screens have their own controls in the bottom right.
+  const quitHidden = state.view === 'editor' || state.view === 'settings';
   const [tutorial, setTutorial] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
 
@@ -52,7 +56,7 @@ export function AppFrame({children}: {children: ReactNode}) {
         {children}
       </div>
       <StatusIsland />
-      {IS_NATIVE ? <QuitRow /> : null}
+      {IS_NATIVE ? <QuitRow hidden={quitHidden} /> : null}
       <Tutorial open={tutorial} onClose={() => setTutorial(false)} />
       <UpdateNotice forceOpen={updateOpen} onClose={() => setUpdateOpen(false)} />
     </div>
@@ -113,9 +117,9 @@ function MeltArc() {
  * Native only. Closing the window leaves the daemon recording, which is the
  * point, so the two outcomes are named rather than left to a close button.
  */
-function QuitRow() {
+function QuitRow({hidden}: {hidden: boolean}) {
   return (
-    <div className="quit-row">
+    <div className="quit-row" data-hidden={hidden || undefined} aria-hidden={hidden}>
       <button type="button" className="quit-btn" onClick={keepRunning}>
         <IconMinimize size={14} />
         <span>Minimize</span>

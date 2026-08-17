@@ -1,60 +1,29 @@
 import {useState} from 'react';
 
 import {useStore} from '../state/store';
-import {usePlayback} from '../state/playback';
+import {useClipActions} from '../state/clipActions';
 import {api} from '../lib/api';
-import {copyShareLink} from '../lib/share';
-import {clipTitle, type Clip} from '../lib/types';
-import {ClipCard, type ClipActions} from '../components/ClipCard';
+import {ClipCard} from '../components/ClipCard';
 import {ContextMenu} from '../components/ContextMenu';
 import {PlaylistModal, type PlaylistDraft} from '../components/PlaylistModal';
 import {Modal} from '../components/Modal';
-import {IconWarning} from '../components/Icons';
+import {IconMore, IconWarning} from '../components/Icons';
 
 export function Clips() {
-  const {state, dispatch, visibleClips, hotkey, notify, refreshPlaylists, refreshClips} =
-    useStore();
-  const {openViewer, openTrim} = usePlayback();
+  const {state, dispatch, visibleClips, hotkey, notify, refreshPlaylists} = useStore();
   const {playlists, currentPlaylistId, searchQuery, recentNew, status, config} = state;
 
   const playlist = currentPlaylistId
     ? (playlists.find(p => p.id === currentPlaylistId) ?? null)
     : null;
 
-  const [menu, setMenu] = useState<{clip: Clip; at: {x: number; y: number}} | null>(null);
+  const {actions, overlays} = useClipActions();
   const [editingPlaylist, setEditingPlaylist] = useState<'new' | 'edit' | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState<Clip | null>(null);
   const [confirmPlaylistDelete, setConfirmPlaylistDelete] = useState(false);
-  const [manualCopy, setManualCopy] = useState<string | null>(null);
+  const [playlistMenu, setPlaylistMenu] = useState<{x: number; y: number} | null>(null);
 
   const fail = (title: string) => (err: Error) =>
     notify({kind: 'error', title, detail: err.message, tone: 'error', holdMs: 7000});
-
-  const actions: ClipActions = {
-    onTrim: clip => openTrim(clip.slug),
-    onOpen: clip => openViewer(clip.slug),
-    onReveal: clip => void api.revealClip(clip.slug).catch(fail('Could not open the file manager')),
-    onCopyFile: clip =>
-      void api
-        .copyClipFile(clip.slug)
-        .then(() => notify({kind: 'info', title: 'Video copied, paste it anywhere', tone: 'accent', holdMs: 3500}))
-        .catch(fail('Could not copy the video')),
-    onCopyLink: clip => void copyShareLink(clip, notify, setManualCopy),
-    onDelete: clip => setConfirmDelete(clip),
-    onRename: async (clip, name) => {
-      try {
-        const updated = await api.renameClip(clip.slug, name);
-        await refreshClips();
-        if (updated?.name && clipTitle(updated) !== name) {
-          // Punctuation is normalised server side, so say what landed on disk.
-          notify({kind: 'info', title: `Saved as ${clipTitle(updated)}`, tone: 'neutral', holdMs: 4000});
-        }
-      } catch (err) {
-        fail('Rename failed')(err as Error);
-      }
-    },
-    onContextMenu: (clip, at) => setMenu({clip, at}),
-  };
 
   const submitPlaylist = async (draft: PlaylistDraft) => {
     if (editingPlaylist === 'edit' && playlist) {
@@ -77,6 +46,7 @@ export function Clips() {
   const subtitle = searchQuery.trim()
     ? `${count} match${count === 1 ? '' : 'es'} for "${searchQuery.trim()}"`
     : `${count} clip${count === 1 ? '' : 's'}`;
+  const isAuto = playlist?.kind === 'auto';
 
   return (
     <div className="clips">
@@ -90,18 +60,18 @@ export function Clips() {
         </div>
 
         <div className="clips-tools">
-          {playlist && playlist.kind !== 'auto' ? (
-            <>
-              <button type="button" className="btn btn-quiet" onClick={() => setEditingPlaylist('edit')}>
-                Edit playlist
-              </button>
-              <button
-                type="button"
-                className="btn btn-quiet btn-danger"
-                onClick={() => setConfirmPlaylistDelete(true)}>
-                Delete playlist
-              </button>
-            </>
+          {playlist ? (
+            <button
+              type="button"
+              className="btn btn-quiet btn-icon-only"
+              title="Playlist options"
+              aria-label="Playlist options"
+              onClick={e => {
+                const r = e.currentTarget.getBoundingClientRect();
+                setPlaylistMenu({x: r.right - 200, y: r.bottom + 6});
+              }}>
+              <IconMore size={16} />
+            </button>
           ) : null}
           <button type="button" className="btn btn-quiet" onClick={() => setEditingPlaylist('new')}>
             New playlist
@@ -151,27 +121,25 @@ export function Clips() {
         </div>
       )}
 
-      {menu ? (
+      {playlistMenu && playlist ? (
         <ContextMenu
-          at={menu.at}
-          heading="Add to playlist"
-          emptyLabel="No playlists yet"
-          onClose={() => setMenu(null)}
-          items={playlists.map(p => ({
-            id: p.id,
-            label: p.name,
-            mark: p.emoji ?? undefined,
-            onSelect: () => {
-              const slug = menu.clip.slug;
-              void api
-                .addClipToPlaylist(p.id, slug)
-                .then(result => {
-                  if (result.ok === false) throw new Error(result.error || 'Could not add the clip');
-                  notify({kind: 'info', title: `Added to ${p.name}`, tone: 'accent', holdMs: 3000});
-                })
-                .catch(fail('Could not add the clip'));
+          at={playlistMenu}
+          heading={playlist.name}
+          emptyLabel="No actions"
+          onClose={() => setPlaylistMenu(null)}
+          items={[
+            {
+              id: 'edit',
+              label: 'Edit playlist',
+              onSelect: () => setEditingPlaylist('edit'),
             },
-          }))}
+            {
+              id: 'delete',
+              label: 'Delete playlist',
+              danger: true,
+              onSelect: () => setConfirmPlaylistDelete(true),
+            },
+          ]}
         />
       ) : null}
 
@@ -181,37 +149,6 @@ export function Clips() {
         onClose={() => setEditingPlaylist(null)}
         onSubmit={submitPlaylist}
       />
-
-      <Modal
-        open={confirmDelete !== null}
-        title="Delete this clip?"
-        onClose={() => setConfirmDelete(null)}
-        footer={
-          <>
-            <button type="button" className="btn btn-quiet" onClick={() => setConfirmDelete(null)}>
-              Keep it
-            </button>
-            <button
-              type="button"
-              className="btn btn-danger-solid"
-              onClick={() => {
-                const clip = confirmDelete;
-                setConfirmDelete(null);
-                if (!clip) return;
-                void api
-                  .deleteClip(clip.slug)
-                  .then(() => notify({kind: 'info', title: 'Clip deleted', tone: 'neutral', holdMs: 3000}))
-                  .catch(fail('Could not delete the clip'));
-              }}>
-              Delete
-            </button>
-          </>
-        }>
-        <p>
-          {confirmDelete ? clipTitle(confirmDelete) : ''} will be removed from disk. This cannot be
-          undone.
-        </p>
-      </Modal>
 
       <Modal
         open={confirmPlaylistDelete}
@@ -244,13 +181,15 @@ export function Clips() {
             </button>
           </>
         }>
-        <p>The clips themselves stay put. Only the playlist goes.</p>
+        <p>
+          The clips themselves stay put. Only the playlist goes.
+          {isAuto
+            ? ' This one was created automatically, so Vice will not build it again for this game.'
+            : ''}
+        </p>
       </Modal>
 
-      <Modal open={manualCopy !== null} title="Copy this link" onClose={() => setManualCopy(null)}>
-        <p>The clipboard was not available, so here is the link to copy by hand.</p>
-        <textarea className="manual-copy" readOnly value={manualCopy ?? ''} rows={3} />
-      </Modal>
+      {overlays}
     </div>
   );
 }
