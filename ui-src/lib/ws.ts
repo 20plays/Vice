@@ -1,6 +1,20 @@
 import type {WsMessage} from './types';
 
 /**
+ * Extra listeners on the same socket, for messages the store does not keep.
+ *
+ * Export progress is the only one: it belongs to whichever screen started the
+ * render, arrives many times a second, and would otherwise re-render the whole
+ * app through the store for a progress bar nobody else is watching.
+ */
+const extra = new Set<(msg: WsMessage) => void>();
+
+export function onWsMessage(fn: (msg: WsMessage) => void): () => void {
+  extra.add(fn);
+  return () => extra.delete(fn);
+}
+
+/**
  * The daemon's WebSocket. Reconnects on close, because the daemon restarting
  * under a window that stays open is normal (package upgrade, watchdog).
  */
@@ -15,7 +29,9 @@ export function connectWs(onMessage: (msg: WsMessage) => void): () => void {
       socket = new WebSocket(`ws://${location.host}/ws`);
       socket.onmessage = event => {
         try {
-          onMessage(JSON.parse(event.data as string) as WsMessage);
+          const msg = JSON.parse(event.data as string) as WsMessage;
+          onMessage(msg);
+          extra.forEach(fn => fn(msg));
         } catch (err) {
           console.warn('Ignored an unreadable WebSocket frame', err);
         }
