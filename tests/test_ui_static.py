@@ -392,6 +392,49 @@ class OfflineTests(unittest.TestCase):
             self.assertNotIn(host, js, f"the bundle reaches out to {host}")
 
 
+class DesignTokenTests(unittest.TestCase):
+    """Every token referenced must exist, or the declaration silently dies."""
+
+    # Set inline by a component, with a fallback, rather than by the theme.
+    LOCAL = {"chip", "filled"}
+
+    def test_no_css_variable_is_referenced_that_does_not_exist(self) -> None:
+        bundle = BUNDLE_CSS.read_text()
+        used = set()
+        for path in UI_SRC.rglob("*"):
+            if path.suffix not in {".css", ".ts", ".tsx"} or not path.is_file():
+                continue
+            used.update(re.findall(r"var\(--([a-z0-9-]+)", path.read_text()))
+
+        missing = sorted(
+            name
+            for name in used
+            if name not in self.LOCAL
+            and not name.startswith(("vice-", "ed-"))
+            and f"--{name}:" not in bundle
+        )
+        # A declaration using an undefined variable is dropped entirely, so a
+        # typo removes a border or a shadow with no error anywhere.
+        self.assertEqual(missing, [], f"undefined design tokens: {missing}")
+
+    def test_locally_defined_variables_carry_a_fallback(self) -> None:
+        for name in self.LOCAL:
+            for path in UI_SRC.rglob("*.css"):
+                for hit in re.findall(rf"var\(--{name}[^)]*\)", path.read_text()):
+                    self.assertIn(",", hit, f"{hit} in {path.name} needs a fallback")
+
+
+class TypographyTests(unittest.TestCase):
+    def test_nothing_is_set_below_eleven_pixels(self) -> None:
+        offenders = []
+        for path in sorted(UI_SRC.rglob("*.css")):
+            for line_no, line in enumerate(path.read_text().splitlines(), 1):
+                for size in re.findall(r"font-size:\s*([0-9.]+)px", line):
+                    if float(size) < 11:
+                        offenders.append(f"{path.name}:{line_no} ({size}px)")
+        self.assertEqual(offenders, [], f"type below 11px: {offenders}")
+
+
 class WebSocketCoverageTests(unittest.TestCase):
     """Every message the daemon broadcasts has to land somewhere."""
 

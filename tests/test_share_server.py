@@ -298,6 +298,55 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(ShareServer is not None and ClientSession is not None, "aiohttp is not installed")
+class ClipCountTests(unittest.IsolatedAsyncioTestCase):
+    """status.clips is the library size, not this process's save tally."""
+
+    async def asyncSetUp(self) -> None:
+        self.root = tempfile.TemporaryDirectory()
+        root = Path(self.root.name)
+        self.output_dir = root / "clips"
+        self.output_dir.mkdir()
+        cfg = Config(
+            output=OutputConfig(directory=str(self.output_dir)),
+            sharing=SharingConfig(
+                port=_free_port(), public_port=_free_port(), cloudflare_tunnel=False
+            ),
+        )
+        self.server = ShareServer(cfg)
+        await self.server.start()
+        for name in ("a", "b", "c"):
+            path = self.output_dir / f"{name}.mp4"
+            path.write_bytes(b"0" * 16)
+            self.server.add_clip(path)
+        self.client = ClientSession()
+
+    async def asyncTearDown(self) -> None:
+        await self.client.close()
+        await self.server.stop()
+        self.root.cleanup()
+
+    async def test_clip_count_matches_the_library(self) -> None:
+        self.assertEqual(self.server.clip_count(), 3)
+
+    async def test_a_daemon_status_callback_cannot_hide_the_real_count(self) -> None:
+        # The daemon merges its own dict over this payload. It used to send a
+        # counter that only ever counted saves made by the running process, so
+        # a daemon that had been up a while reported a handful against a
+        # library of dozens (both in the UI and in `vice status`).
+        self.server.get_status_cb = lambda: {"recording": True, "backend": "test"}
+        async with self.client.get(
+            f"{self.server.local_base_url()}/api/status"
+        ) as resp:
+            payload = await resp.json()
+        self.assertEqual(payload["clips"], 3)
+
+        async with self.client.get(
+            f"{self.server.local_base_url()}/api/clips"
+        ) as resp:
+            listed = await resp.json()
+        self.assertEqual(payload["clips"], len(listed["clips"]))
+
+
 class PlaylistApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmpdir = tempfile.TemporaryDirectory()

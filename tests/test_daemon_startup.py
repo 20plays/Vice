@@ -216,5 +216,34 @@ class ClipGameTagFallbackTests(unittest.TestCase):
         self.assertEqual(daemon._last_clip_game, "Counter-Strike 2")
 
 
+
+
+class ClipCountReportingTests(unittest.TestCase):
+    """The status payload reports the library, not this process's tally."""
+
+    def _daemon(self) -> ViceDaemon:
+        with mock.patch("vice.main.load_config", return_value=Config()), \
+                mock.patch("vice.main.create_recorder", return_value=_StubRecorder()), \
+                mock.patch("vice.main.HotkeyListener"), \
+                mock.patch("vice.main.can_access_hotkeys", return_value=True):
+            return ViceDaemon()
+
+    def test_library_size_comes_from_the_share_server(self) -> None:
+        # _clip_count only ever counted saves made by this process, so a
+        # daemon left running reported a handful against a library of dozens.
+        daemon = self._daemon()
+        daemon._clip_count = 2
+        daemon.share = mock.Mock()
+        daemon.share.clip_count.return_value = 51
+        self.assertEqual(daemon._clips_in_library(), 51)
+        self.assertEqual(daemon._get_status()["clips"], 51)
+
+    def test_counter_is_the_fallback_before_the_share_server_is_up(self) -> None:
+        daemon = self._daemon()
+        daemon._clip_count = 4
+        daemon.share = None
+        self.assertEqual(daemon._clips_in_library(), 4)
+
+
 if __name__ == "__main__":
     unittest.main()

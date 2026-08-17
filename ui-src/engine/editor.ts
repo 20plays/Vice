@@ -1,5 +1,6 @@
+import {formatBytes} from '../lib/format';
 import {clipNeedsProxy, playbackUrl} from '../lib/playback';
-import type {Clip} from '../lib/types';
+import {clipTitle, type Clip} from '../lib/types';
 import {
   ED_FONTS,
   ED_FX,
@@ -1235,7 +1236,7 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
     const miss = it.clipId && missing.has(it.clipId) ? ' missing' : '';
     const base = `data-item="${escAttr(it.id)}" style="left:${left}px;width:${w}px"`;
     const c = it.clipId ? clipOf(it) : null;
-    const name = c ? c.name || it.clipId : it.clipId || '';
+    const name = c ? clipTitle(c) : it.clipId || '';
 
     if (it.kind === 'audio') {
       const bars = waveBars(waveSeed(it.clipId || ''), Math.max(16, Math.round(it.dur * 3)));
@@ -1776,10 +1777,7 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
           const media = c.thumb_url
             ? `<img src="${escAttr(c.thumb_url)}" loading="lazy" alt="" draggable="false">`
             : `<div class="ed-lib-ph">${edGlyph(ED_ICONS.film, 24)}</div>`;
-          const meta = [
-            c.width ? `${c.width}x${c.height}` : '',
-            c.size ? `${(c.size / 1048576).toFixed(1)} MB` : '',
-          ]
+          const meta = [c.width ? `${c.width}x${c.height}` : '', c.size ? formatBytes(c.size) : '']
             .filter(Boolean)
             .join(' · ');
           return `
@@ -1790,7 +1788,7 @@ export function createEditorEngine(deps: EditorDeps): EditorEngine {
           ${c.game ? `<span class="ed-lib-game">${escHtml(c.game.toUpperCase())}</span>` : ''}
           <span class="ed-lib-dur">${fmtS(c.duration ?? 0)}</span>
         </div>
-        <div class="ed-lib-name">${escHtml(c.name || c.slug)}</div>
+        <div class="ed-lib-name">${escHtml(clipTitle(c))}</div>
         <div class="ed-lib-meta">${escHtml(meta)}</div>
       </div>`;
         })

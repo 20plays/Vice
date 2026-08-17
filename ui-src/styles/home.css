@@ -17,7 +17,8 @@
 
 .home-hero p {
   margin: 0;
-  max-width: 62ch;
+  /* Wide enough that "Double-tap" does not wrap at its own hyphen. */
+  max-width: 78ch;
   color: var(--color-text-secondary);
   line-height: 1.6;
 }
@@ -319,7 +320,7 @@ kbd {
 .clip-badge {
   padding: 3px 8px;
   border-radius: var(--radius-full);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -627,8 +628,33 @@ kbd {
   background: var(--vice-accent-hover);
 }
 
-.btn:active {
+.btn:active:not(:disabled) {
   transform: scale(0.96);
+}
+
+/* A quiet button sits on the page background on some screens and on a raised
+   card on others. A flat fill disappears against one or the other, so it uses
+   a translucent wash plus an edge, which reads on both. */
+.btn-quiet {
+  background: var(--color-overlay-hover);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+  color: var(--color-text-primary);
+}
+
+.btn-quiet:hover:not(:disabled) {
+  background: var(--color-accent-muted);
+  box-shadow: inset 0 0 0 1px transparent;
+  color: var(--color-text-accent);
+}
+
+.btn-quiet:disabled {
+  box-shadow: inset 0 0 0 1px transparent;
+  color: var(--color-text-disabled);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .btn:focus-visible {
@@ -732,7 +758,7 @@ kbd {
   justify-content: space-between;
   gap: var(--spacing-3);
   padding: 6px 0;
-  border-top: 1px solid var(--color-border-subtle);
+  border-top: 1px solid var(--color-border);
   font-size: 13px;
 }
 
@@ -868,7 +894,7 @@ kbd {
   width: 6px;
   height: 6px;
   border-radius: var(--radius-full);
-  background: var(--color-border-subtle);
+  background: var(--color-border);
   transition:
     width var(--duration-medium) var(--vice-ease-spring),
     background-color var(--duration-medium) var(--ease-standard);

@@ -116,7 +116,7 @@ body {
    seam down the side of every panel. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--color-border-subtle) transparent;
+  scrollbar-color: var(--color-border) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -132,7 +132,7 @@ body {
   border: 3px solid transparent;
   border-radius: var(--radius-full);
   background-clip: content-box;
-  background-color: var(--color-border-subtle);
+  background-color: var(--color-border);
 }
 
 *::-webkit-scrollbar-thumb:hover {
@@ -165,4 +165,91 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ── entrances ──────────────────────────────────────────────────────
+   Motion on mount only. React keeps elements alive across state changes,
+   so these fire when a screen or a card is genuinely new and never again
+   on a re-render. Everything here is suppressed by .perf-low and by
+   prefers-reduced-motion through the rules above. */
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.frame-content > .home,
+.frame-content > .clips,
+.frame-content > .settings,
+.frame-content > .editor,
+.frame-content > .about {
+  animation: rise-in var(--duration-medium) var(--ease-standard) backwards;
+}
+
+/* Cards arrive in sequence rather than all at once. Capped at eight, after
+   which the delay would be longer than anyone waits to see the grid. */
+.clip-grid > *,
+.clip-row > *,
+.tiles > .tile-row > *,
+.playlist-row > * {
+  animation: rise-in var(--duration-medium) var(--ease-standard) backwards;
+}
+
+.clip-grid > :nth-child(1),
+.clip-row > :nth-child(1),
+.tiles > .tile-row > :nth-child(1) {
+  animation-delay: 0ms;
+}
+.clip-grid > :nth-child(2),
+.clip-row > :nth-child(2),
+.tiles > .tile-row > :nth-child(2) {
+  animation-delay: 25ms;
+}
+.clip-grid > :nth-child(3),
+.clip-row > :nth-child(3),
+.tiles > .tile-row > :nth-child(3) {
+  animation-delay: 50ms;
+}
+.clip-grid > :nth-child(4),
+.clip-row > :nth-child(4) {
+  animation-delay: 75ms;
+}
+.clip-grid > :nth-child(5),
+.clip-row > :nth-child(5) {
+  animation-delay: 100ms;
+}
+.clip-grid > :nth-child(6),
+.clip-row > :nth-child(6) {
+  animation-delay: 125ms;
+}
+.clip-grid > :nth-child(7),
+.clip-row > :nth-child(7) {
+  animation-delay: 150ms;
+}
+.clip-grid > :nth-child(n + 8),
+.clip-row > :nth-child(n + 8) {
+  animation-delay: 175ms;
+}
+
+/* The settings cards come in as a column, which reads as the page settling
+   rather than eight separate arrivals. */
+.settings-body > .settings-card {
+  animation: rise-in var(--duration-medium) var(--ease-standard) backwards;
+}
+.settings-body > .settings-card:nth-child(2) {
+  animation-delay: 30ms;
+}
+.settings-body > .settings-card:nth-child(n + 3) {
+  animation-delay: 60ms;
+}
+
+.perf-low .frame-content > *,
+.perf-low .clip-grid > *,
+.perf-low .clip-row > *,
+.perf-low .tiles > .tile-row > *,
+.perf-low .playlist-row > *,
+.perf-low .settings-body > .settings-card {
+  animation: none;
 }

@@ -399,6 +399,17 @@ class ViceDaemon:
         """Stable representation of recording config for live-apply checks."""
         return json.dumps(asdict(self.cfg.recording), sort_keys=True)
 
+    def _clips_in_library(self) -> int:
+        """Size of the clip library.
+
+        self._clip_count only ever counted saves made by this process, so a
+        daemon that had been running a while reported a handful against a
+        library of dozens. The share server scans the output directory and is
+        the only thing that knows; the counter is the fallback for when the
+        share server is not up.
+        """
+        return self.share.clip_count() if self.share else self._clip_count
+
     def _on_clip_saved(self, path: Path) -> None:
         self._clip_count += 1
         click.echo(f"\n[Vice] Clip saved: {path}")
@@ -940,7 +951,7 @@ class ViceDaemon:
             "cpu_fallback":   bool(getattr(self.recorder, "cpu_fallback", False)),
             "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
             "backend":          self.recorder.name,
-            "clips":            self._clip_count,
+            "clips":            self._clips_in_library(),
             "session_active":   self._session_active,
             "clip_key":         self.cfg.hotkeys.clip,
             "hotkeys_available": self.hotkeys_available,
@@ -1207,7 +1218,7 @@ class ViceDaemon:
                     "ready":          self._ready,
                     "version":        __version__,
                     "backend":        self.recorder.name,
-                    "clips":          self._clip_count,
+                    "clips":          self._clips_in_library(),
                     "output":         self.cfg.output.directory,
                     "local_url":      self.share.local_base_url() if self.share else None,
                     "public_url":     self.share.public_base_url() if self.share else None,

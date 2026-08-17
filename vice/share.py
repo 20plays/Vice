@@ -1631,13 +1631,17 @@ class ShareServer:
             payload["warning"] = "Some sharing settings require a full app restart to take effect."
         return web.json_response(payload)
 
+    def clip_count(self) -> int:
+        """How many clips are in the library right now."""
+        return len(self._clips)
+
     async def _api_status(self, _: web.Request) -> web.Response:
         extra = self.get_status_cb() if self.get_status_cb else {}
         public_url = self.public_base_url()
         return web.json_response({
             "running":  True,
             "version":  __version__,
-            "clips":    len(self._clips),
+            "clips":    self.clip_count(),
             "local_url": self.local_base_url(),
             "public_url": public_url,
             "base_url": public_url,

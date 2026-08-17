@@ -65,6 +65,21 @@
   font-weight: 600;
 }
 
+/* The chip grows into its selected state rather than snapping. */
+.rail-chip {
+  transform-origin: center;
+}
+
+.rail-chip[aria-current] {
+  animation: chip-in var(--duration-medium) var(--vice-ease-spring);
+}
+
+@keyframes chip-in {
+  from {
+    transform: scale(0.9);
+  }
+}
+
 .rail-chip:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
@@ -112,7 +127,7 @@
   align-items: center;
   gap: var(--spacing-5);
   padding: var(--spacing-3) 0;
-  border-top: 1px solid var(--color-border-subtle);
+  border-top: 1px solid var(--color-border);
 }
 
 .settings-card h2 + .srow {
@@ -172,7 +187,7 @@
 }
 
 .srow[data-stack] .srow-control {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   justify-content: stretch;
   flex-direction: column;
   align-items: stretch;
@@ -262,7 +277,7 @@
 }
 
 .select:hover:not(:disabled) {
-  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  box-shadow: inset 0 0 0 1px var(--color-border);
 }
 
 .select:focus-visible {
@@ -308,8 +323,8 @@ select option {
   border-radius: var(--radius-full);
   background: linear-gradient(
     to right,
-    var(--color-accent) 0 var(--filled),
-    var(--color-background-body) var(--filled) 100%
+    var(--color-accent) 0 var(--filled, 0%),
+    var(--color-background-body) var(--filled, 0%) 100%
   );
   cursor: pointer;
 }
@@ -540,7 +555,7 @@ select option {
 }
 
 .key-capture:hover {
-  box-shadow: inset 0 0 0 1px var(--color-border-subtle);
+  box-shadow: inset 0 0 0 1px var(--color-border);
 }
 
 .key-capture[data-compact] {
@@ -644,7 +659,7 @@ select option {
   padding: 10px 10px 10px var(--spacing-4);
   border-radius: var(--radius-container);
   background: var(--color-background-popover);
-  box-shadow: var(--shadow-medium);
+  box-shadow: var(--shadow-med);
   transition:
     box-shadow var(--duration-medium) var(--ease-standard),
     background-color var(--duration-medium) var(--ease-standard);
@@ -676,7 +691,10 @@ select option {
     gap: var(--spacing-2);
   }
 
+  /* flex-basis is the main axis, so the 300px that sets the control column's
+     width in a row becomes a 300px height once the row stacks. */
   .srow-control {
+    flex: 0 0 auto;
     justify-content: flex-start;
   }
 

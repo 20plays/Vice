@@ -12,6 +12,15 @@ import {IconClips, IconPlaylist, IconSettings} from '../components/Icons';
 
 const ROW_LIMIT = 8;
 
+/** The distinctive part of a quick-tunnel URL, which is all that identifies it. */
+function tunnelHost(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/\.trycloudflare\.com$/, '');
+  } catch {
+    return url;
+  }
+}
+
 function greeting(): string {
   const hour = new Date().getHours();
   if (hour < 12) return 'Good morning';
@@ -170,27 +179,24 @@ export function Home() {
               )
             }
           />
+          {/* The address, not a second copy of the switch beside it. */}
           <button
             type="button"
             className="tile tile-readout"
             onClick={copyTunnel}
-            aria-label="Copy the public link">
+            disabled={!tunnelUrl}
+            aria-label={tunnelUrl ? 'Copy the public link' : 'No public link yet'}>
             <span className="tile-badge" aria-hidden="true">
-              <GlobeIcon />
+              <LinkIcon />
             </span>
             <span className="tile-text">
-              <b>
-                {tunnelUrl
-                  ? 'Copy public link'
-                  : tunnelOn
-                    ? 'Public link starting'
-                    : 'No public link'}
-              </b>
+              <b>{tunnelUrl ? tunnelHost(tunnelUrl) : tunnelOn ? 'Connecting' : 'Local only'}</b>
               <span className="tile-mono">
-                {tunnelUrl ??
-                  (tunnelOn
-                    ? 'Waiting for cloudflared'
-                    : 'Share links stay on your network')}
+                {tunnelUrl
+                  ? 'Tap to copy'
+                  : tunnelOn
+                    ? 'cloudflared is starting up'
+                    : 'Links work on this network'}
               </span>
             </span>
           </button>
@@ -359,6 +365,13 @@ function ClipRow({
     </section>
   );
 }
+
+const LinkIcon = () => (
+  <svg {...stroke} width={19} height={19} viewBox="0 0 24 24">
+    <path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1" />
+    <path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1" />
+  </svg>
+);
 
 const stroke = {
   fill: 'none',
