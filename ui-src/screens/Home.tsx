@@ -277,10 +277,10 @@ export function Home() {
             className="choice"
             onClick={() => {
               setWfMicPrompt(false);
-              void setMic(true, 'mix');
+              void setMic(true, 'backend_fallback');
             }}>
-            <b>Mix them together</b>
-            <span>One track containing the desktop and the microphone.</span>
+            <b>Use a backend that can do both</b>
+            <span>Vice records with a compatible backend whenever the microphone is on.</span>
           </button>
           <button
             type="button"

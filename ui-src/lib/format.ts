@@ -20,6 +20,21 @@ export function formatDuration(seconds: number, withUnit = false): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+/**
+ * The spelled-out form the settings sliders use: "20 s", "10 min", "2:30 min".
+ *
+ * A buffer length is a quantity being chosen, not a position being read, and
+ * "10:00" beside a slider reads like a timestamp. This is the wording the old
+ * form used and it was right.
+ */
+export function formatLengthLong(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0 s';
+  if (seconds < 60) return `${Math.round(seconds)} s`;
+  const m = Math.floor(seconds / 60);
+  const r = Math.round(seconds % 60);
+  return r === 0 ? `${m} min` : `${m}:${String(r).padStart(2, '0')} min`;
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];

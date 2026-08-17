@@ -112,6 +112,51 @@ body {
   color: var(--color-text-secondary);
 }
 
+/* Scrollbars. The platform default is a light-mode chrome bar that reads as a
+   seam down the side of every panel. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-subtle) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--radius-full);
+  background-clip: content-box;
+  background-color: var(--color-border-subtle);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-disabled);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Reduced effects: the ambient wash goes and motion is cut to what is needed
+   to show a state change, on the machines the probe found cannot afford it. */
+.perf-low .vice-ambient {
+  display: none;
+}
+
+.perf-low *,
+.perf-low *::before,
+.perf-low *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 90ms !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

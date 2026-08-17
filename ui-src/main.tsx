@@ -9,6 +9,7 @@ import './styles/shell.css';
 import './styles/home.css';
 import './styles/clips.css';
 import './styles/viewer.css';
+import './styles/settings.css';
 
 import {VICE_THEMES, accentVars} from './theme/viceTheme';
 import {StoreProvider, useStore} from './state/store';
@@ -16,6 +17,7 @@ import {PlaybackProvider} from './state/playback';
 import {AppFrame} from './components/AppFrame';
 import {Home} from './screens/Home';
 import {Clips} from './screens/Clips';
+import {Settings} from './screens/Settings';
 
 function App() {
   const {state} = useStore();
@@ -53,10 +55,10 @@ function App() {
 function Screen({view}: {view: string}) {
   if (view === 'home') return <Home />;
   if (view === 'clips') return <Clips />;
+  if (view === 'settings') return <Settings />;
 
   const titles: Record<string, string> = {
     editor: 'Editor',
-    settings: 'Settings',
     about: 'About',
   };
   return (
