@@ -1,4 +1,4 @@
-import type {Clip, Config, Playlist, Status} from './types';
+import type {Clip, Config, Highlight, Playlist, Status} from './types';
 
 /**
  * The daemon's local HTTP API. Every call is same-origin: the public server
@@ -61,12 +61,17 @@ export const api = {
   copyClipFile: (slug: string) => post<void>(`/api/clips/${slug}/copy-file`),
   trimClip: (slug: string, start: number, end: number) =>
     post<Clip>(`/api/clips/${slug}/trim`, {start, end}),
-  markViewed: (slug: string) => post<void>(`/api/clips/${slug}/view`),
+  markViewed: (slug: string) => post<{ok?: boolean; views: number}>(`/api/clips/${slug}/view`),
 
-  highlights: (slug: string) => request<unknown[]>(`/api/clips/${slug}/highlights`),
-  addHighlight: (slug: string, body: unknown) => post<unknown>(`/api/clips/${slug}/highlights`, body),
-  updateHighlight: (slug: string, id: string, body: unknown) =>
-    request<unknown>(`/api/clips/${slug}/highlights/${id}`, {
+  highlights: async (slug: string) =>
+    (await request<{highlights: Highlight[]}>(`/api/clips/${slug}/highlights`)).highlights ?? [],
+  addHighlight: (slug: string, body: Omit<Highlight, 'id'>) =>
+    post<{ok?: boolean; error?: string; highlight: Highlight}>(
+      `/api/clips/${slug}/highlights`,
+      body,
+    ),
+  updateHighlight: (slug: string, id: string, body: Partial<Omit<Highlight, 'id'>>) =>
+    request<{ok?: boolean; error?: string}>(`/api/clips/${slug}/highlights/${id}`, {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),

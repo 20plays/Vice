@@ -1,6 +1,7 @@
 import {useMemo, useState} from 'react';
 
 import {useStore} from '../state/store';
+import {usePlayback} from '../state/playback';
 import {api} from '../lib/api';
 import {copyToClipboard} from '../lib/clipboard';
 import {formatDuration} from '../lib/format';
@@ -330,6 +331,7 @@ function ClipRow({
   action?: {label: string; onClick: () => void};
   empty?: string;
 }) {
+  const {openViewer} = usePlayback();
   return (
     <section className="home-section">
       <div className="home-section-head">
@@ -345,7 +347,12 @@ function ClipRow({
       ) : (
         <div className="clip-row">
           {clips.map(clip => (
-            <ClipCard key={clip.slug} clip={clip} isNew={recentNew.includes(clip.slug)} />
+            <ClipCard
+              key={clip.slug}
+              clip={clip}
+              isNew={recentNew.includes(clip.slug)}
+              actions={{onOpen: c => openViewer(c.slug)}}
+            />
           ))}
         </div>
       )}

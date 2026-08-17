@@ -1,10 +1,16 @@
 /** Formatting shared across screens. */
 
-/** 95 becomes "1:35". With `withUnit`, short durations read as "20s". */
+/**
+ * 95 becomes "1:35". With `withUnit`, anything under a minute reads as "20s".
+ *
+ * Under a minute a fraction is kept, because these are the readouts where it
+ * carries the meaning: a half-second trim selection rendered as "0s" says the
+ * selection is empty when it is not.
+ */
 export function formatDuration(seconds: number, withUnit = false): string {
   if (!Number.isFinite(seconds) || seconds < 0) return withUnit ? '0s' : '0:00';
   const whole = Math.floor(seconds);
-  if (withUnit && whole < 60) return `${whole}s`;
+  if (withUnit && seconds < 60) return `${seconds.toFixed(seconds % 1 ? 1 : 0)}s`;
   const m = Math.floor(whole / 60);
   const s = whole % 60;
   if (m >= 60) {

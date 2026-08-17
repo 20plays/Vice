@@ -8,9 +8,11 @@ import './styles/base.css';
 import './styles/shell.css';
 import './styles/home.css';
 import './styles/clips.css';
+import './styles/viewer.css';
 
 import {VICE_THEMES, accentVars} from './theme/viceTheme';
 import {StoreProvider, useStore} from './state/store';
+import {PlaybackProvider} from './state/playback';
 import {AppFrame} from './components/AppFrame';
 import {Home} from './screens/Home';
 import {Clips} from './screens/Clips';
@@ -36,11 +38,13 @@ function App() {
   return (
     <Theme theme={VICE_THEMES[accent]} mode="dark">
       <div className="vice-ambient" style={accentVars(accent)} aria-hidden="true" />
-      <div className="vice-app" style={accentVars(accent)}>
-        <AppFrame>
-          <Screen view={view} />
-        </AppFrame>
-      </div>
+      <PlaybackProvider>
+        <div className="vice-app" style={accentVars(accent)}>
+          <AppFrame>
+            <Screen view={view} />
+          </AppFrame>
+        </div>
+      </PlaybackProvider>
     </Theme>
   );
 }

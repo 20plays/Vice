@@ -1,8 +1,9 @@
 import {useState} from 'react';
 
 import {useStore} from '../state/store';
+import {usePlayback} from '../state/playback';
 import {api} from '../lib/api';
-import {copyToClipboard} from '../lib/clipboard';
+import {copyShareLink} from '../lib/share';
 import {clipTitle, type Clip} from '../lib/types';
 import {ClipCard, type ClipActions} from '../components/ClipCard';
 import {ContextMenu} from '../components/ContextMenu';
@@ -13,6 +14,7 @@ import {IconWarning} from '../components/Icons';
 export function Clips() {
   const {state, dispatch, visibleClips, hotkey, notify, refreshPlaylists, refreshClips} =
     useStore();
+  const {openViewer, openTrim} = usePlayback();
   const {playlists, currentPlaylistId, searchQuery, recentNew, status, config} = state;
 
   const playlist = currentPlaylistId
@@ -29,36 +31,15 @@ export function Clips() {
     notify({kind: 'error', title, detail: err.message, tone: 'error', holdMs: 7000});
 
   const actions: ClipActions = {
-    onTrim: clip => notify({kind: 'info', title: 'The trim editor lands next', detail: clipTitle(clip), tone: 'neutral', holdMs: 3000}),
-    onOpen: clip => notify({kind: 'info', title: 'The viewer lands next', detail: clipTitle(clip), tone: 'neutral', holdMs: 3000}),
+    onTrim: clip => openTrim(clip.slug),
+    onOpen: clip => openViewer(clip.slug),
     onReveal: clip => void api.revealClip(clip.slug).catch(fail('Could not open the file manager')),
     onCopyFile: clip =>
       void api
         .copyClipFile(clip.slug)
         .then(() => notify({kind: 'info', title: 'Video copied, paste it anywhere', tone: 'accent', holdMs: 3500}))
         .catch(fail('Could not copy the video')),
-    onCopyLink: clip => {
-      if (!clip.share_url) return;
-      void copyToClipboard(clip.share_url).then(ok => {
-        if (!ok) {
-          setManualCopy(clip.share_url);
-          return;
-        }
-        // A LAN address looks identical to a real share link until a friend
-        // tries to open it and cannot (#105).
-        if (clip.share_is_public === false) {
-          notify({
-            kind: 'info',
-            title: 'Link copied, but it is local only',
-            detail: 'Install cloudflared for links that work off your network',
-            tone: 'neutral',
-            holdMs: 8000,
-          });
-        } else {
-          notify({kind: 'info', title: 'Share link copied', tone: 'accent', holdMs: 3000});
-        }
-      });
-    },
+    onCopyLink: clip => void copyShareLink(clip, notify, setManualCopy),
     onDelete: clip => setConfirmDelete(clip),
     onRename: async (clip, name) => {
       try {

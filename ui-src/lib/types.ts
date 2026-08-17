@@ -27,6 +27,14 @@ export interface Clip {
   thumb_url: string;
 }
 
+/** A marked timestamp inside one clip. The id is a string of digits. */
+export interface Highlight {
+  id: string;
+  time: number;
+  label: string;
+  color: string;
+}
+
 export interface Playlist {
   id: string;
   kind: 'auto' | 'custom' | string;

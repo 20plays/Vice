@@ -1,5 +1,6 @@
 import {useEffect, useRef, type ReactNode} from 'react';
 
+import {useEscape} from '../lib/escape';
 import {IconClose} from './Icons';
 
 /**
@@ -24,24 +25,16 @@ export function Modal({
   const boxRef = useRef<HTMLDivElement>(null);
   const returnFocusTo = useRef<Element | null>(null);
 
+  useEscape(open, onClose);
+
   useEffect(() => {
     if (!open) return;
     returnFocusTo.current = document.activeElement;
     boxRef.current?.focus();
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        // Stop here so a modal over the viewer does not also close the viewer.
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    document.addEventListener('keydown', onKey, true);
     return () => {
-      document.removeEventListener('keydown', onKey, true);
       (returnFocusTo.current as HTMLElement | null)?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 
