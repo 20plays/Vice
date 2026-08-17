@@ -63,7 +63,29 @@ export const HEVC_SUPPORTED: boolean = (() => {
 })();
 
 interface PyWebView {
-  api: {keep_running: () => void; quit_app: () => void};
+  api: {
+    keep_running: () => void;
+    quit_app: () => void;
+    open_url?: (url: string) => void;
+  };
+}
+
+/**
+ * Open a link in the user's real browser. The native window has no chrome to
+ * get back from, so a link followed inside it is a trap.
+ */
+export function openExternal(url: string | undefined): void {
+  if (!url) return;
+  try {
+    const bridge = (window as unknown as {pywebview?: PyWebView}).pywebview;
+    if (IS_NATIVE && bridge?.api?.open_url) {
+      bridge.api.open_url(String(url));
+      return;
+    }
+  } catch (err) {
+    console.debug('The native open_url bridge threw', err);
+  }
+  window.open(url, '_blank', 'noopener');
 }
 
 /** Hide the window but leave the daemon recording. Native only. */

@@ -7,6 +7,8 @@ import type {ViewName} from '../lib/types';
 import {
   IconAbout,
   IconClips,
+  IconDownload,
+  IconHelp,
   IconEditor,
   IconHome,
   IconMark,
@@ -23,7 +25,13 @@ const NAV: {view: ViewName; label: string; Icon: typeof IconHome}[] = [
   {view: 'about', label: 'About', Icon: IconAbout},
 ];
 
-export function SideNav() {
+export function SideNav({
+  onShowTutorial,
+  onShowUpdate,
+}: {
+  onShowTutorial: () => void;
+  onShowUpdate: () => void;
+}) {
   const {state, dispatch, notify} = useStore();
   const {view, currentPlaylistId, searchQuery, playlists, clips, config} = state;
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -139,12 +147,32 @@ export function SideNav() {
       ) : null}
 
       <div className="sidenav-foot">
-        {buffer ? (
-          <>
-            <span className="sidenav-foot-key">Buffer</span>
-            <span className="sidenav-foot-value">{formatDuration(buffer, true)}</span>
-          </>
+        {state.update?.version ? (
+          <button
+            type="button"
+            className="update-chip"
+            onClick={onShowUpdate}
+            title={`Vice ${state.update.version} is available`}>
+            <IconDownload size={12} />
+            <span>Update</span>
+          </button>
         ) : null}
+        <div className="sidenav-foot-row">
+          {buffer ? (
+            <>
+              <span className="sidenav-foot-key">Buffer</span>
+              <span className="sidenav-foot-value">{formatDuration(buffer, true)}</span>
+            </>
+          ) : null}
+          <button
+            type="button"
+            className="sidenav-help"
+            onClick={onShowTutorial}
+            title="Quick start"
+            aria-label="Quick start">
+            <IconHelp size={14} />
+          </button>
+        </div>
       </div>
     </nav>
   );

@@ -72,7 +72,13 @@ export interface Status {
 export interface UpdateInfo {
   version: string;
   url?: string;
-  notes?: string;
+  /** Summarised release-note lines, one per bullet. */
+  notes?: string[];
+  /**
+   * How this machine should update, worked out by the daemon: "aur",
+   * "script" or "unknown". The command is empty for unknown.
+   */
+  install?: {method?: string; command?: string};
 }
 
 export interface Config {
@@ -107,7 +113,7 @@ export type WsMessage =
   | {type: 'export_done'; [key: string]: unknown}
   | {type: 'export_error'; [key: string]: unknown}
   | {type: 'editor_project_changed'}
-  | {type: 'update_available'; version: string; url?: string; notes?: string};
+  | ({type: 'update_available'} & UpdateInfo);
 
 export type ViewName = 'home' | 'clips' | 'editor' | 'settings' | 'about';
 

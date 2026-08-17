@@ -309,8 +309,10 @@ function reduceWs(state: State, msg: WsMessage): State {
         holdMs: 3000,
       });
 
-    case 'update_available':
-      return {...state, update: {version: msg.version, url: msg.url, notes: msg.notes}};
+    case 'update_available': {
+      const {type: _ignored, ...info} = msg;
+      return {...state, update: info};
+    }
 
     case 'editor_project_changed':
       return {...state, editorProjectRevision: state.editorProjectRevision + 1};

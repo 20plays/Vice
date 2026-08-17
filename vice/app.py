@@ -656,7 +656,7 @@ def _prepare_webview_environment() -> None:
     GPU, so this is QtWebEngine's integration rather than the driver.
     Nothing here can fix it, so the UI measures its own frame rate instead
     and turns the expensive effects down when they are not affordable
-    (see ui/scripts/perf.js).
+    (see ui-src/lib/effects.ts).
 
     Users can replace the flags by setting QTWEBENGINE_CHROMIUM_FLAGS
     themselves, or append extra flags via VICE_WEBVIEW_FLAGS.

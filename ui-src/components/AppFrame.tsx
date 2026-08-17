@@ -1,6 +1,9 @@
-import type {ReactNode} from 'react';
+import {useEffect, useState, type ReactNode} from 'react';
 
+import {api} from '../lib/api';
 import {IS_NATIVE, keepRunning, quitVice} from '../lib/env';
+import {Tutorial} from './Tutorial';
+import {UpdateNotice} from './UpdateNotice';
 import {IconMinimize, IconPower} from './Icons';
 import {SideNav} from './SideNav';
 import {StatusIsland} from './StatusIsland';
@@ -18,9 +21,31 @@ const MELT = 32;
  * longer a wide side for the curve to melt into.
  */
 export function AppFrame({children}: {children: ReactNode}) {
+  const [tutorial, setTutorial] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
+
+  // First run only. The flag is kept on the daemon as well as locally,
+  // because the native window's localStorage does not survive a restart on
+  // every QtWebEngine build, which made the tutorial reappear every launch.
+  useEffect(() => {
+    if (localStorage.getItem('vice_tutorial_shown')) return;
+    let cancelled = false;
+    void api
+      .getAppState()
+      .then(s => {
+        if (cancelled) return;
+        if (s.tutorial_seen) localStorage.setItem('vice_tutorial_shown', '1');
+        else setTutorial(true);
+      })
+      .catch(() => !cancelled && setTutorial(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="frame">
-      <SideNav />
+      <SideNav onShowTutorial={() => setTutorial(true)} onShowUpdate={() => setUpdateOpen(true)} />
       <Melt />
       <div className="frame-content">
         <Banners />
@@ -28,6 +53,8 @@ export function AppFrame({children}: {children: ReactNode}) {
       </div>
       <StatusIsland />
       {IS_NATIVE ? <QuitRow /> : null}
+      <Tutorial open={tutorial} onClose={() => setTutorial(false)} />
+      <UpdateNotice forceOpen={updateOpen} onClose={() => setUpdateOpen(false)} />
     </div>
   );
 }

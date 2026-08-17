@@ -275,6 +275,14 @@
   cursor: not-allowed;
 }
 
+/* Native dropdown popups ignore the page background but inherit the text
+   colour, leaving white-on-white menus on some desktops (KDE Plasma 6 on
+   Wayland). System colours hand contrast back to the OS menu renderer (#85). */
+select option {
+  background-color: Menu;
+  color: MenuText;
+}
+
 .select-chevron {
   position: absolute;
   right: 11px;

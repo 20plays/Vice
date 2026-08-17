@@ -842,7 +842,7 @@ export function Settings() {
         <Card id="discord" title="Discord Rich Presence" register={register('discord')}>
           <Row
             label="Show what you are playing"
-            help="Puts &quot;Clipping &lt;Game&gt; with Vice&quot; on your Discord profile while a known game is focused. Window titles are never sent.">
+            help="Puts &quot;Clipping &lt;Game&gt; with Vice&quot; on your Discord profile while a known game is focused. On by default, and window titles are never sent.">
             <Toggle
               label="Show what you are playing"
               checked={draft.discordEnabled}

@@ -113,3 +113,19 @@ export const IconCheck = ({size = 14, className}: IconProps) => (
     <path d="m4 12.5 5 5L20 6.5" />
   </svg>
 );
+
+export const IconHelp = ({size = 14, className}: IconProps) => (
+  <svg {...base(size)} className={className} aria-hidden="true">
+    <circle cx="12" cy="12" r="9.5" />
+    <path d="M9.4 9.2a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.7-2.6 2.7" />
+    <path d="M12 17h.01" />
+  </svg>
+);
+
+export const IconDownload = ({size = 12, className}: IconProps) => (
+  <svg {...base(size)} className={className} aria-hidden="true">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M12 15V3" />
+  </svg>
+);

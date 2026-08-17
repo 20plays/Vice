@@ -20,6 +20,7 @@ import {Home} from './screens/Home';
 import {Clips} from './screens/Clips';
 import {Settings} from './screens/Settings';
 import {Editor} from './screens/Editor';
+import {About} from './screens/About';
 
 function App() {
   const {state} = useStore();
@@ -53,22 +54,12 @@ function App() {
   );
 }
 
-/** The remaining screens land one per step. */
 function Screen({view}: {view: string}) {
   if (view === 'home') return <Home />;
   if (view === 'clips') return <Clips />;
   if (view === 'settings') return <Settings />;
   if (view === 'editor') return <Editor />;
-
-  const titles: Record<string, string> = {
-    about: 'About',
-  };
-  return (
-    <section className="screen-placeholder">
-      <h1>{titles[view] ?? view}</h1>
-      <p>This screen is next up in the rebuild.</p>
-    </section>
-  );
+  return <About />;
 }
 
 createRoot(document.getElementById('root')!).render(
