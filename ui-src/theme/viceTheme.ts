@@ -75,11 +75,13 @@ function accentTheme(name: AccentName) {
  * so they stay visible and typed.
  */
 export function accentVars(name: AccentName): Record<string, string> {
-  const {hover, active, ambient} = ACCENTS[name];
+  const {hover, active, ambient, surface, surfaceHover} = ACCENTS[name];
   return {
     '--vice-accent-hover': hover,
     '--vice-accent-active': active,
     '--vice-ambient': ambient,
+    '--vice-surface': surface,
+    '--vice-surface-hover': surfaceHover,
     '--vice-ease-spring': EASE_SPRING,
   };
 }

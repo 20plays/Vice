@@ -21,7 +21,7 @@
   min-width: 0;
   min-height: 0;
   border-radius: var(--radius-container);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   overflow: hidden;
 }
 
@@ -489,7 +489,7 @@
   width: 100%;
   height: 6px;
   border-radius: var(--radius-full);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   cursor: pointer;
 }
 
@@ -663,7 +663,7 @@
   z-index: 12;
   display: flex;
   height: 26px;
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
 }
 
 .ed-rail-corner {
@@ -740,7 +740,7 @@
   justify-content: center;
   gap: 1px;
   padding-left: var(--spacing-2);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   cursor: context-menu;
 }
 
@@ -785,7 +785,7 @@
 
 .ed-item.selected {
   box-shadow:
-    0 0 0 2px var(--color-background-surface),
+    0 0 0 2px var(--vice-surface),
     0 0 0 4px var(--color-accent);
 }
 
@@ -1007,7 +1007,7 @@
   place-items: center;
   border: none;
   border-radius: var(--radius-full);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   color: var(--color-text-primary);
   font: inherit;
   font-size: 12px;
@@ -1108,7 +1108,7 @@
   margin: 0;
   padding: var(--spacing-3);
   border-radius: var(--radius-inner);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--color-text-accent);
@@ -1128,7 +1128,7 @@
 .ed-progress {
   height: 8px;
   border-radius: var(--radius-full);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   overflow: hidden;
 }
 

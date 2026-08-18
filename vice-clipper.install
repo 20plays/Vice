@@ -17,4 +17,9 @@ post_upgrade() {
         echo ":: graphical-session.target. If you have it enabled, run:"
         echo "::   systemctl --user reenable vice.service"
     fi
+    # The daemon holds the old Python in memory until it restarts, and nothing
+    # here can reach the user's session bus to do it for them.
+    echo ":: A running daemon keeps the previous version until it restarts:"
+    echo "::   systemctl --user restart vice.service"
+    echo ":: Opening Vice does the same thing on its own."
 }

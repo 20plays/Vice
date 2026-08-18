@@ -1,6 +1,13 @@
 [Unit]
 Description=Vice game clip recorder daemon
 After=graphical-session.target
+# Give up rather than retrying forever. Some failures are permanent, and the
+# unit used to sit in "activating" retrying one of them thousands of times
+# while looking like it was about to work. Three tries a minute is enough for
+# a genuinely transient fault, and anything else surfaces as failed where the
+# user can see it.
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple

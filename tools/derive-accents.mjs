@@ -90,6 +90,13 @@ const ACCENT_L = 0.71;   // uniform, so all five read equally bright in the swat
 const CHROMA = 0.85;     // neutral's documented dark-ramp chroma reduction
 const AMBIENT_L = 0.30;  // a wash, not a glow
 const AMBIENT_C_MAX = 0.075;
+// Raised surfaces carry a trace of the accent instead of being flat grey, so
+// a card separates from the body by hue as well as by lightness and needs no
+// gradient to do it. Chroma is deliberately tiny: at 0.012 it reads as warmth,
+// not as colour.
+const SURFACE_L = 0.265;
+const SURFACE_HOVER_L = 0.315;
+const SURFACE_C_MAX = 0.012;
 
 const rows = Object.entries(SOURCE).map(([name, source]) => {
   const [, c, h] = hexToOklch(source);
@@ -101,13 +108,24 @@ const rows = Object.entries(SOURCE).map(([name, source]) => {
     hover: oklchToHex([ACCENT_L + 0.06, c * CHROMA, h]),
     active: oklchToHex([ACCENT_L - 0.07, c * CHROMA, h]),
     ambient: oklchToHex([AMBIENT_L, Math.min(c * 0.45, AMBIENT_C_MAX), h]),
+    surface: oklchToHex([SURFACE_L, Math.min(c * 0.12, SURFACE_C_MAX), h]),
+    surfaceHover: oklchToHex([SURFACE_HOVER_L, Math.min(c * 0.16, SURFACE_C_MAX * 1.4), h]),
     onAccent: contrast(base, ON_ACCENT),
     onBody: contrast(base, BODY),
     onSurface: contrast(base, SURFACE),
   };
 });
 
-const failures = rows.filter(r => Math.min(r.onAccent, r.onBody, r.onSurface) < 4.5);
+// Body text sits on the tinted surface, so it is held to the same bar.
+const TEXT = '#ededed';
+for (const r of rows) {
+  r.textOnSurface = contrast(TEXT, r.surface);
+  r.accentOnSurface = contrast(r.base, r.surface);
+}
+
+const failures = rows.filter(
+  r => Math.min(r.onAccent, r.onBody, r.onSurface, r.textOnSurface, r.accentOnSurface) < 4.5,
+);
 if (failures.length) {
   console.error('Accents below WCAG AA 4.5:1:', failures.map(f => f.name).join(', '));
   process.exit(1);
@@ -116,7 +134,9 @@ if (failures.length) {
 for (const r of rows) {
   console.log(
     `${r.name.padEnd(7)} ${r.source} -> ${r.base}  ` +
-    `on-accent ${r.onAccent.toFixed(2)}  on-body ${r.onBody.toFixed(2)}  on-surface ${r.onSurface.toFixed(2)}`,
+    `on-accent ${r.onAccent.toFixed(2)}  on-body ${r.onBody.toFixed(2)}  ` +
+    `on-surface ${r.onSurface.toFixed(2)}  surface ${r.surface} ` +
+    `text-on-surface ${r.textOnSurface.toFixed(2)}  accent-on-surface ${r.accentOnSurface.toFixed(2)}`,
   );
 }
 
@@ -127,6 +147,8 @@ const body = rows
     `    hover: '${r.hover}',\n` +
     `    active: '${r.active}',\n` +
     `    ambient: '${r.ambient}',\n` +
+    `    surface: '${r.surface}',\n` +
+    `    surfaceHover: '${r.surfaceHover}',\n` +
     `  },`,
   )
   .join('\n');
@@ -149,6 +171,9 @@ export interface AccentRamp {
   active: string;
   /** Drives the ambient background wash. Never used for text. */
   ambient: string;
+  /** Raised surfaces: cards, tiles, panels. Flat, with a trace of the hue. */
+  surface: string;
+  surfaceHover: string;
 }
 
 export const ACCENTS: Record<AccentName, AccentRamp> = {

@@ -1437,6 +1437,51 @@ def cli(ctx: click.Context) -> None:
         click.echo(ctx.get_help())
 
 
+def _running_daemon_version(status_line: Optional[str]) -> Optional[str]:
+    """Version reported by the daemon already holding the socket."""
+    try:
+        return str(json.loads(status_line or "").get("version") or "") or None
+    except (ValueError, AttributeError):
+        return None
+
+
+def _take_over_outdated_daemon(status_line: Optional[str]) -> bool:
+    """Stop a daemon running different code so this one can replace it.
+
+    Returns True when the socket is now free. Same version means the user
+    simply started Vice twice, which stays an error: silently killing a
+    healthy daemon would be worse than refusing.
+    """
+    running = _running_daemon_version(status_line)
+    if not running or running == __version__:
+        return False
+
+    log.warning(
+        "Daemon on the socket reports v%s but this binary is v%s; "
+        "stopping it so the upgraded code can take over",
+        running, __version__,
+    )
+    click.echo(f":: Replacing the running Vice {running} daemon with {__version__}", err=True)
+    asyncio.run(_ipc("stop", timeout=5.0))
+
+    # The daemon closes its socket on the way out. Waiting on that rather than
+    # on the process means this works whoever started it.
+    for _ in range(100):
+        if not SOCKET_FILE.exists():
+            return True
+        if asyncio.run(_ipc("status", timeout=0.5)) is None:
+            break
+        time.sleep(0.1)
+
+    if SOCKET_FILE.exists():
+        try:
+            SOCKET_FILE.unlink()
+        except OSError as exc:
+            log.error("Could not clear the old daemon's socket: %s", exc)
+            return False
+    return True
+
+
 @cli.command()
 @click.option("--debug", is_flag=True, help="Enable verbose logging.")
 @click.option("--open-ui/--no-open-ui", default=True,
@@ -1457,8 +1502,16 @@ def start(debug: bool, open_ui: bool) -> None:
     if SOCKET_FILE.exists():
         resp = asyncio.run(_ipc("status", timeout=1.5))
         if resp is not None:
-            click.echo("Vice is already running. Use `vice stop` or `vice status`.", err=True)
-            sys.exit(1)
+            # A daemon left over from before a package upgrade is still running
+            # the old code, and Python cannot hot-reload it. Refusing to start
+            # leaves the user on the old version with no sign of it, and under
+            # systemd it turns into an endless restart loop because retrying
+            # can never clear the condition. Take over instead.
+            if _take_over_outdated_daemon(resp):
+                pass
+            else:
+                click.echo("Vice is already running. Use `vice stop` or `vice status`.", err=True)
+                sys.exit(1)
 
         log.warning("Found stale IPC socket at %s, removing it", SOCKET_FILE)
         try:

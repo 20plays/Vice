@@ -148,6 +148,53 @@ def _daemon_status(timeout: float = 1.0) -> dict | None:
     return asyncio.run(_probe())
 
 
+def _systemd_unit_available() -> bool:
+    """Whether this user's systemd has the Vice unit loaded.
+
+    Everything here is a probe: any failure means "no systemd", and the caller
+    falls back to the plain launch it has always used.
+    """
+    if not os.environ.get("XDG_RUNTIME_DIR"):
+        return False
+    if not shutil.which("systemctl"):
+        return False
+    try:
+        out = subprocess.run(
+            ["systemctl", "--user", "show", "vice.service", "-p", "LoadState", "--value"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.debug("systemctl probe failed: %s", exc)
+        return False
+    return out.stdout.strip() == "loaded"
+
+
+def _start_daemon_via_systemd() -> bool:
+    """Start the daemon as the systemd unit. False means it was not possible.
+
+    restart, not start: the unit may be sitting in a failed state from an
+    earlier attempt, and start on a failed unit does nothing.
+    """
+    if not _systemd_unit_available():
+        return False
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "restart", "vice.service"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.warning("Could not start the Vice service, falling back: %s", exc)
+        return False
+    if result.returncode != 0:
+        log.warning(
+            "systemctl start vice.service failed (%s), falling back to a direct launch: %s",
+            result.returncode, (result.stderr or "").strip()[:200],
+        )
+        return False
+    log.info("Daemon started through systemd")
+    return True
+
+
 def _start_daemon() -> None:
     """Launch the daemon as a detached background process (no-op if running)."""
     normalize_runtime_environment()
@@ -162,6 +209,14 @@ def _start_daemon() -> None:
         except OSError as exc:
             log.error("Could not remove stale socket %s: %s", SOCKET_FILE, exc)
             raise
+    # Hand the job back to systemd when it owns the unit. Starting our own
+    # detached child instead is what used to strand the daemon outside the
+    # service: the unit then had nothing to supervise, and the next time
+    # anything started it, it found this process on the socket, exited 1, and
+    # retried on a loop that could never clear.
+    if _start_daemon_via_systemd():
+        return
+
     cmd = _vice_cmd() + ["start", "--no-open-ui"]
     log.info("Starting daemon: %s", " ".join(cmd))
     # Route the daemon's stdout/stderr to a file so import-time crashes (which

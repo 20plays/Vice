@@ -14,6 +14,9 @@ export interface AccentRamp {
   active: string;
   /** Drives the ambient background wash. Never used for text. */
   ambient: string;
+  /** Raised surfaces: cards, tiles, panels. Flat, with a trace of the hue. */
+  surface: string;
+  surfaceHover: string;
 }
 
 export const ACCENTS: Record<AccentName, AccentRamp> = {
@@ -22,30 +25,40 @@ export const ACCENTS: Record<AccentName, AccentRamp> = {
     hover: '#73baff',
     active: '#2b91e6',
     ambient: '#072f51',
+    surface: '#21262b',
+    surfaceHover: '#2b323a',
   },
   purple: {
     base: '#a68aff',
     hover: '#b7a4ff',
     active: '#9370f1',
     ambient: '#302550',
+    surface: '#25242b',
+    surfaceHover: '#32303a',
   },
   green: {
     base: '#46ba8a',
     hover: '#5ccd9c',
     active: '#29a475',
     ambient: '#003824',
+    surface: '#202723',
+    surfaceHover: '#2a342f',
   },
   red: {
     base: '#fc6d66',
     hover: '#ff9087',
     active: '#e35652',
     ambient: '#4d1c1a',
+    surface: '#2b2322',
+    surfaceHover: '#3a2e2d',
   },
   orange: {
     base: '#ef7e3e',
     hover: '#ff945c',
     active: '#d76824',
     ambient: '#4b2005',
+    surface: '#2a2420',
+    surfaceHover: '#392f2a',
   },
 };
 

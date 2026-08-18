@@ -208,7 +208,7 @@
   position: relative;
   height: 8px;
   border-radius: var(--radius-full);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   cursor: pointer;
 }
 
@@ -288,7 +288,7 @@ kbd {
   margin: 0;
   padding: var(--spacing-3);
   border-radius: var(--radius-inner);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   color: var(--color-text-secondary);
   font-size: 12.5px;
 }
@@ -456,7 +456,7 @@ kbd {
   height: 26px;
   border-radius: 7px;
   object-fit: cover;
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
 }
 
 .player-titles {
@@ -553,7 +553,7 @@ kbd {
   flex: 1;
   height: 6px;
   border-radius: var(--radius-full);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   cursor: pointer;
 }
 
@@ -636,7 +636,7 @@ kbd {
   right: 0;
   height: 10px;
   border-radius: var(--radius-full);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
 }
 
 .trim-selection {

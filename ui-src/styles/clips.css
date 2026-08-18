@@ -300,7 +300,7 @@
   padding: 10px var(--spacing-3);
   border: none;
   border-radius: var(--radius-inner);
-  background: var(--color-background-surface);
+  background: var(--vice-surface);
   color: var(--color-text-primary);
   font: inherit;
   font-size: 13.5px;
