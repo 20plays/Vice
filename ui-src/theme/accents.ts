@@ -16,6 +16,12 @@ export interface AccentRamp {
   ambient: string;
   /** The page background: a neighbouring hue to the accent, never black. */
   bg: string;
+  /** Resting fill for cards, tiles and panels. The gray these replaced. */
+  soft: string;
+  /** A control at rest sitting on a soft surface: quiet buttons, inputs. */
+  softRaised: string;
+  /** Where a soft surface or a soft control goes under the pointer. */
+  softHover: string;
 }
 
 export const ACCENTS: Record<AccentName, AccentRamp> = {
@@ -25,6 +31,9 @@ export const ACCENTS: Record<AccentName, AccentRamp> = {
     active: '#2b91e6',
     ambient: '#072f51',
     bg: '#15171f',
+    soft: '#222532',
+    softRaised: '#2d3140',
+    softHover: '#363b4d',
   },
   purple: {
     base: '#a68aff',
@@ -32,6 +41,9 @@ export const ACCENTS: Record<AccentName, AccentRamp> = {
     active: '#9370f1',
     ambient: '#302550',
     bg: '#1a151c',
+    soft: '#2b232e',
+    softRaised: '#382d3b',
+    softHover: '#433747',
   },
   green: {
     base: '#46ba8a',
@@ -39,6 +51,9 @@ export const ACCENTS: Record<AccentName, AccentRamp> = {
     active: '#29a475',
     ambient: '#003824',
     bg: '#0f1a18',
+    soft: '#182a28',
+    softRaised: '#213634',
+    softHover: '#28413f',
   },
   red: {
     base: '#fc6d66',
@@ -46,6 +61,9 @@ export const ACCENTS: Record<AccentName, AccentRamp> = {
     active: '#e35652',
     ambient: '#4d1c1a',
     bg: '#1d1511',
+    soft: '#30231c',
+    softRaised: '#3d2e25',
+    softHover: '#4a372d',
   },
   orange: {
     base: '#ef7e3e',
@@ -53,6 +71,9 @@ export const ACCENTS: Record<AccentName, AccentRamp> = {
     active: '#d76824',
     ambient: '#4b2005',
     bg: '#1c160f',
+    soft: '#2e2419',
+    softRaised: '#3a2f22',
+    softHover: '#463929',
   },
 };
 

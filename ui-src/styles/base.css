@@ -158,13 +158,29 @@ body {
 
 /* Raised surfaces separate from the background by tone and a hairline, the
    way Material's surface containers do. No drop shadow: an app window is not
-   a stack of floating cards, and the hue that ties the theme together lives
-   in the background underneath rather than in any single element. */
+   a stack of floating cards.
+
+   The fill is the accent's soft tone rather than the neutral theme's gray, so
+   a resting card belongs to the theme without competing with it. It carries
+   the background's hue, one step up in lightness, which is what keeps the
+   window a single tint ladder instead of a gray object on a coloured page.
+
+   --raised-hover used to be --color-accent-muted, which the dark neutral
+   theme defines as #262626, the same value as the surface it sat on. Every
+   hover built on it repainted the element in the colour it already was. */
 .vice-app {
-  --raised: var(--color-background-surface);
-  --raised-hover: var(--color-accent-muted);
+  --raised: var(--vice-soft);
+  --raised-hover: var(--vice-soft-hover);
   --raised-edge: inset 0 0 0 1px var(--color-border);
   --raised-edge-hover: inset 0 0 0 1px var(--color-border);
+  /* A control at rest: quiet buttons, inputs, tracks. One step further up
+     again, so it reads both on a card and on the bare page background. */
+  --control: var(--vice-soft-raised);
+  --control-hover: var(--vice-soft-hover);
+  /* A control that reads as recessed into its card instead of sitting on it:
+     a select at rest, a switch that is off, an inline code run. Material's
+     lowest surface container, which here is the page tone itself. */
+  --recessed: var(--vice-bg);
 }
 
 /* ── dragging a clip onto a playlist ────────────────────────────── */

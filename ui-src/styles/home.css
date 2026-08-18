@@ -32,7 +32,7 @@ kbd {
   display: inline-block;
   padding: 2px 8px;
   border-radius: var(--radius-inner);
-  background: var(--color-background-surface);
+  background: var(--control);
   color: var(--color-text-primary);
   font-family: var(--font-family-code);
   font-size: 0.85em;
@@ -88,7 +88,7 @@ kbd {
 }
 
 .tile:hover:not(:disabled) {
-  background: var(--color-accent-muted);
+  background: var(--raised-hover);
 }
 
 /* Tightening the radius as it shrinks is what makes a press feel like a
@@ -238,7 +238,7 @@ kbd {
   margin: 0;
   padding: var(--spacing-6);
   border-radius: var(--radius-container);
-  background: var(--color-background-surface);
+  background: var(--vice-soft);
   color: var(--color-text-secondary);
   text-align: center;
   font-size: 13.5px;
@@ -278,7 +278,7 @@ kbd {
   aspect-ratio: 16 / 9;
   border: none;
   padding: 0;
-  background: var(--color-background-body);
+  background: var(--recessed);
   cursor: pointer;
   overflow: hidden;
 }
@@ -310,7 +310,7 @@ kbd {
 .clip-thumb-empty {
   position: absolute;
   inset: 0;
-  background: var(--color-background-body);
+  background: var(--recessed);
 }
 
 .clip-badges {
@@ -421,7 +421,7 @@ kbd {
 }
 
 .playlist-chip:hover {
-  background: var(--color-accent-muted);
+  background: var(--raised-hover);
   transform: translateY(-2px);
 }
 
@@ -577,7 +577,7 @@ kbd {
   padding: var(--spacing-3);
   border: none;
   border-radius: var(--radius-element);
-  background: var(--color-background-surface);
+  background: var(--vice-soft);
   color: var(--color-text-primary);
   font: inherit;
   text-align: left;
@@ -588,7 +588,7 @@ kbd {
 }
 
 .choice:hover {
-  background: var(--color-accent-muted);
+  background: var(--raised-hover);
   transform: translateY(-1px);
 }
 
@@ -612,7 +612,7 @@ kbd {
   padding: var(--spacing-3);
   border: none;
   border-radius: var(--radius-element);
-  background: var(--color-background-surface);
+  background: var(--control);
   color: var(--color-text-primary);
   font-family: var(--font-family-code);
   font-size: 12.5px;
@@ -643,16 +643,16 @@ kbd {
 }
 
 /* A quiet button sits on the page background on some screens and on a raised
-   card on others. A flat fill disappears against one or the other, so it uses
-   a translucent wash plus an edge, which reads on both. */
+   card on others. The soft ladder puts it one step above a card, so the same
+   flat fill reads against both without needing a translucent wash. */
 .btn-quiet {
-  background: var(--color-overlay-hover);
+  background: var(--control);
   box-shadow: inset 0 0 0 1px var(--color-border);
   color: var(--color-text-primary);
 }
 
 .btn-quiet:hover:not(:disabled) {
-  background: var(--color-accent-muted);
+  background: var(--control-hover);
   box-shadow: inset 0 0 0 1px transparent;
   color: var(--color-text-accent);
 }
@@ -700,7 +700,7 @@ kbd {
   gap: var(--spacing-4);
   padding: var(--spacing-5);
   border-radius: var(--radius-container);
-  background: var(--color-background-surface);
+  background: var(--vice-soft);
 }
 
 .about-mark {
@@ -710,7 +710,7 @@ kbd {
   display: grid;
   place-items: center;
   border-radius: var(--radius-element);
-  background: var(--color-accent-muted);
+  background: var(--control);
   color: var(--color-text-accent);
 }
 
@@ -736,7 +736,7 @@ kbd {
 .about-chip {
   padding: 4px 11px;
   border-radius: var(--radius-full);
-  background: var(--color-background-body);
+  background: var(--recessed);
   color: var(--color-text-secondary);
   font-size: 11px;
 }
@@ -754,7 +754,7 @@ kbd {
   gap: var(--spacing-2);
   padding: var(--spacing-4) var(--spacing-5);
   border-radius: var(--radius-container);
-  background: var(--color-background-surface);
+  background: var(--vice-soft);
 }
 
 .about-card h3,
@@ -817,7 +817,7 @@ kbd {
 }
 
 .credit-avatar-dim {
-  background: var(--color-background-body);
+  background: var(--recessed);
   color: var(--color-text-secondary);
 }
 
@@ -844,7 +844,7 @@ kbd {
   margin-top: 4px;
   padding: 8px 8px 8px var(--spacing-3);
   border-radius: var(--radius-element);
-  background: var(--color-background-body);
+  background: var(--recessed);
 }
 
 .about-cmd code {
@@ -866,7 +866,7 @@ kbd {
   gap: var(--spacing-3);
   padding: var(--spacing-3);
   border-radius: var(--radius-element);
-  background: var(--color-background-surface);
+  background: var(--vice-soft);
 }
 
 .tut-badge {
@@ -874,7 +874,7 @@ kbd {
   min-width: 52px;
   padding: 5px 9px;
   border-radius: var(--radius-inner);
-  background: var(--color-accent-muted);
+  background: var(--control);
   color: var(--color-text-accent);
   font-size: 11px;
   font-weight: 600;
@@ -921,7 +921,7 @@ kbd {
   display: block;
   padding: var(--spacing-3);
   border-radius: var(--radius-inner);
-  background: var(--color-background-surface);
+  background: var(--control);
   color: var(--color-text-accent);
   font-size: 12.5px;
   word-break: break-all;

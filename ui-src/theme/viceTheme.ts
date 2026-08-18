@@ -70,17 +70,21 @@ function accentTheme(name: AccentName) {
 
 /**
  * Values our own CSS needs that are not part of the design system's token set:
- * the hover/active ends of the accent ramp and the ambient wash. Set as inline
- * custom properties on the app root rather than smuggled through defineTheme,
- * so they stay visible and typed.
+ * the hover/active ends of the accent ramp, the ambient wash, and the soft
+ * tones that stand in for the neutral theme's grays on anything at rest. Set as
+ * inline custom properties on the app root rather than smuggled through
+ * defineTheme, so they stay visible and typed.
  */
 export function accentVars(name: AccentName): Record<string, string> {
-  const {hover, active, ambient, bg} = ACCENTS[name];
+  const {hover, active, ambient, bg, soft, softRaised, softHover} = ACCENTS[name];
   return {
     '--vice-accent-hover': hover,
     '--vice-accent-active': active,
     '--vice-ambient': ambient,
     '--vice-bg': bg,
+    '--vice-soft': soft,
+    '--vice-soft-raised': softRaised,
+    '--vice-soft-hover': softHover,
     '--vice-ease-spring': EASE_SPRING,
   };
 }

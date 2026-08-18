@@ -28,7 +28,7 @@
   gap: 4px;
   padding: 4px;
   border-radius: var(--radius-full);
-  background: var(--color-background-surface);
+  background: var(--vice-soft);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -164,7 +164,7 @@
 .srow-label code {
   padding: 1px 4px;
   border-radius: 5px;
-  background: var(--color-background-body);
+  background: var(--recessed);
   font-family: var(--font-family-code);
   font-size: 11px;
 }
@@ -204,7 +204,7 @@
   padding: 0;
   border: none;
   border-radius: var(--radius-full);
-  background: var(--color-background-body);
+  background: var(--recessed);
   cursor: pointer;
   transition: background-color var(--duration-medium) var(--ease-standard);
 }
@@ -269,7 +269,7 @@
   padding: 9px 34px 9px var(--spacing-3);
   border: none;
   border-radius: var(--radius-inner);
-  background: var(--color-background-body);
+  background: var(--recessed);
   color: var(--color-text-primary);
   font: inherit;
   font-size: 13px;
@@ -325,7 +325,7 @@ select option {
   background: linear-gradient(
     to right,
     var(--color-accent) 0 var(--filled, 0%),
-    var(--color-background-body) var(--filled, 0%) 100%
+    var(--recessed) var(--filled, 0%) 100%
   );
   cursor: pointer;
 }
@@ -337,7 +337,7 @@ select option {
   border: none;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--color-background-surface);
+  box-shadow: 0 0 0 3px var(--vice-soft);
   cursor: grab;
   transition: transform var(--duration-fast) var(--vice-ease-spring);
 }
@@ -371,7 +371,7 @@ select option {
   padding: 9px var(--spacing-3);
   border: none;
   border-radius: var(--radius-inner);
-  background: var(--color-background-body);
+  background: var(--recessed);
   color: var(--color-text-primary);
   font: inherit;
   font-size: 13px;
@@ -471,12 +471,12 @@ select option {
   gap: 6px;
   padding: 5px 6px 5px 5px;
   border-radius: var(--radius-full);
-  background: var(--color-background-body);
+  background: var(--recessed);
   font-size: 12.5px;
 }
 
 .track-mix {
-  background: var(--color-accent-muted);
+  background: var(--control);
 }
 
 .track-num {
@@ -545,7 +545,7 @@ select option {
   padding: 9px var(--spacing-3);
   border: none;
   border-radius: var(--radius-inner);
-  background: var(--color-background-body);
+  background: var(--recessed);
   color: var(--color-text-primary);
   font-family: var(--font-family-code);
   font-size: 12px;
@@ -642,7 +642,7 @@ select option {
 
 .swatch[data-active] {
   box-shadow:
-    0 0 0 2px var(--color-background-surface),
+    0 0 0 2px var(--vice-soft),
     0 0 0 4px var(--color-text-primary);
 }
 
@@ -667,7 +667,7 @@ select option {
 }
 
 .save-bar[data-dirty] {
-  background: var(--color-accent-muted);
+  background: var(--control);
   box-shadow: var(--shadow-high);
 }
 

@@ -103,6 +103,25 @@ const BG_L = 0.205;        // lifted off pure black so the wash has somewhere to
 const BG_C = 0.016;        // present at a glance only when you look for it
 const BG_HUE_OFFSET = 25;
 
+// The second, quieter tone: what an inactive control or a resting card is
+// filled with. Material's surface containers, not a second brand colour.
+//
+// It carries the background's hue rather than the accent's own, so the window
+// is one tint ladder instead of two competing ones, and the accent stays the
+// only thing in the room wearing its own hue. Chroma climbs slightly with
+// lightness because a pale tone needs more of it to read as tinted at all.
+//
+// The lightness stops are the neutral grays these replace (#262626 and up), so
+// the tonal ladder is unchanged and the only difference is that it is no longer
+// gray. SOFT is a resting surface, RAISED is a control sitting on one, HOVER is
+// where either goes under the pointer.
+const SOFT_L = 0.269;
+const SOFT_C = 0.024;
+const SOFT_RAISED_L = 0.315;
+const SOFT_RAISED_C = 0.028;
+const SOFT_HOVER_L = 0.355;
+const SOFT_HOVER_C = 0.032;
+
 const rows = Object.entries(SOURCE).map(([name, source]) => {
   const [, c, h] = hexToOklch(source);
   const base = oklchToHex([ACCENT_L, c * CHROMA, h]);
@@ -114,6 +133,9 @@ const rows = Object.entries(SOURCE).map(([name, source]) => {
     active: oklchToHex([ACCENT_L - 0.07, c * CHROMA, h]),
     ambient: oklchToHex([AMBIENT_L, Math.min(c * 0.45, AMBIENT_C_MAX), h]),
     bg: oklchToHex([BG_L, BG_C, (h + BG_HUE_OFFSET) % 360]),
+    soft: oklchToHex([SOFT_L, SOFT_C, (h + BG_HUE_OFFSET) % 360]),
+    softRaised: oklchToHex([SOFT_RAISED_L, SOFT_RAISED_C, (h + BG_HUE_OFFSET) % 360]),
+    softHover: oklchToHex([SOFT_HOVER_L, SOFT_HOVER_C, (h + BG_HUE_OFFSET) % 360]),
     onAccent: contrast(base, ON_ACCENT),
     onBody: contrast(base, BODY),
     onSurface: contrast(base, SURFACE),
@@ -122,16 +144,81 @@ const rows = Object.entries(SOURCE).map(([name, source]) => {
 
 // Text and accents sit on the tinted background, so both are held to the bar.
 const TEXT = '#ededed';
+const TEXT_SECONDARY = '#a3a3a3';
+
 for (const r of rows) {
   r.textOnBg = contrast(TEXT, r.bg);
   r.accentOnBg = contrast(r.base, r.bg);
+  r.textOnSoft = contrast(TEXT, r.soft);
+  r.textOnSoftRaised = contrast(TEXT, r.softRaised);
+  r.textOnSoftHover = contrast(TEXT, r.softHover);
+  r.accentOnSoft = contrast(r.base, r.soft);
+  // Badges and marks fill with the raised tone and write on it in the accent,
+  // which is the one place accent-coloured text lands on a soft surface.
+  r.accentOnRaised = contrast(r.base, r.softRaised);
+  // Meta lines on a card are secondary text, so it is held to the bar too.
+  r.dimOnSoft = contrast(TEXT_SECONDARY, r.soft);
+  // Cards have to stay visibly above the background they sit on. Tone is the
+  // only thing separating them, since there is no drop shadow to help.
+  r.softOverBg = contrast(r.soft, r.bg);
 }
 
 const failures = rows.filter(
-  r => Math.min(r.onAccent, r.onBody, r.onSurface, r.textOnBg, r.accentOnBg) < 4.5,
+  r =>
+    Math.min(
+      r.onAccent,
+      r.onBody,
+      r.onSurface,
+      r.textOnBg,
+      r.accentOnBg,
+      r.textOnSoft,
+      r.textOnSoftRaised,
+      r.textOnSoftHover,
+      r.accentOnSoft,
+      r.accentOnRaised,
+      r.dimOnSoft,
+    ) < 4.5,
 );
 if (failures.length) {
   console.error('Accents below WCAG AA 4.5:1:', failures.map(f => f.name).join(', '));
+  for (const f of failures) {
+    console.error(
+      `  ${f.name}: text-on-soft ${f.textOnSoft.toFixed(2)} ` +
+      `text-on-raised ${f.textOnSoftRaised.toFixed(2)} ` +
+      `text-on-hover ${f.textOnSoftHover.toFixed(2)} ` +
+      `accent-on-soft ${f.accentOnSoft.toFixed(2)} dim-on-soft ${f.dimOnSoft.toFixed(2)}`,
+    );
+  }
+  process.exit(1);
+}
+
+// The ladder has to keep its order and its spacing on every accent.
+//
+// Comparing text contrast against the old grays was tried and is the wrong
+// test: at these tones every stop clears AA about three times over, so the
+// comparison only measures how a hue happens to land in WCAG's luminance
+// formula, and green failed it by 0.12 in a ratio of 13:1. What matters is
+// that a card stays visibly above the page, a control stays above the card,
+// and hover stays above rest. That is lightness, and OKLCH measures it in a
+// way that holds across all five hues.
+const LADDER_STEP = 0.035;
+const ladderFailures = rows.filter(r => {
+  const [bgL] = hexToOklch(r.bg);
+  const [softL] = hexToOklch(r.soft);
+  const [raisedL] = hexToOklch(r.softRaised);
+  const [hoverL] = hexToOklch(r.softHover);
+  r.ladder = [bgL, softL, raisedL, hoverL];
+  return (
+    softL - bgL < LADDER_STEP ||
+    raisedL - softL < LADDER_STEP ||
+    hoverL - raisedL < LADDER_STEP
+  );
+});
+if (ladderFailures.length) {
+  console.error('Soft ladder too flat to separate:', ladderFailures.map(f => f.name).join(', '));
+  for (const f of ladderFailures) {
+    console.error(`  ${f.name}: ${f.ladder.map(v => v.toFixed(3)).join(' -> ')}`);
+  }
   process.exit(1);
 }
 
@@ -140,7 +227,11 @@ for (const r of rows) {
     `${r.name.padEnd(7)} ${r.source} -> ${r.base}  ` +
     `on-accent ${r.onAccent.toFixed(2)}  on-body ${r.onBody.toFixed(2)}  ` +
     `on-surface ${r.onSurface.toFixed(2)}  bg ${r.bg} ` +
-    `text-on-bg ${r.textOnBg.toFixed(2)}  accent-on-bg ${r.accentOnBg.toFixed(2)}`,
+    `text-on-bg ${r.textOnBg.toFixed(2)}  accent-on-bg ${r.accentOnBg.toFixed(2)}\n` +
+    `        soft ${r.soft} / ${r.softRaised} / ${r.softHover}  ` +
+    `text-on-soft ${r.textOnSoft.toFixed(2)}  dim-on-soft ${r.dimOnSoft.toFixed(2)}  ` +
+    `accent-on-soft ${r.accentOnSoft.toFixed(2)}  accent-on-raised ${r.accentOnRaised.toFixed(2)}  ` +
+    `soft-over-bg ${r.softOverBg.toFixed(2)}`,
   );
 }
 
@@ -152,6 +243,9 @@ const body = rows
     `    active: '${r.active}',\n` +
     `    ambient: '${r.ambient}',\n` +
     `    bg: '${r.bg}',\n` +
+    `    soft: '${r.soft}',\n` +
+    `    softRaised: '${r.softRaised}',\n` +
+    `    softHover: '${r.softHover}',\n` +
     `  },`,
   )
   .join('\n');
@@ -176,6 +270,12 @@ export interface AccentRamp {
   ambient: string;
   /** The page background: a neighbouring hue to the accent, never black. */
   bg: string;
+  /** Resting fill for cards, tiles and panels. The gray these replaced. */
+  soft: string;
+  /** A control at rest sitting on a soft surface: quiet buttons, inputs. */
+  softRaised: string;
+  /** Where a soft surface or a soft control goes under the pointer. */
+  softHover: string;
 }
 
 export const ACCENTS: Record<AccentName, AccentRamp> = {
