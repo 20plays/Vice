@@ -30,8 +30,8 @@
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="assets/screenshots/viewer.png" width="420"/><br/>
-      <sub>Viewer: highlight markers dropped mid-session</sub>
+      <img src="assets/screenshots/settings.png" width="420"/><br/>
+      <sub>Settings, in any of five accents</sub>
     </td>
     <td align="center" width="50%">
       <img src="assets/screenshots/trim.png" width="420"/><br/>

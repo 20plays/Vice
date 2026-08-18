@@ -1,6 +1,7 @@
 import {useEffect, useRef, type ReactNode} from 'react';
 
 import {useEscape} from '../lib/escape';
+import {useExitTransition} from '../lib/exit';
 import {IconClose} from './Icons';
 
 /**
@@ -26,6 +27,9 @@ export function Modal({
   const returnFocusTo = useRef<Element | null>(null);
 
   useEscape(open, onClose);
+  // Held open for the length of the exit so it animates away rather than
+  // disappearing between frames. Matches --duration-medium.
+  const {mounted, closing} = useExitTransition(open, 320);
 
   useEffect(() => {
     if (!open) return;
@@ -36,12 +40,16 @@ export function Modal({
     };
   }, [open]);
 
-  if (!open) return null;
+  if (!mounted) return null;
 
   return (
-    <div className="scrim" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+    <div
+      className="scrim"
+      data-closing={closing || undefined}
+      onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div
         className="modal"
+        data-closing={closing || undefined}
         data-wide={wide || undefined}
         role="dialog"
         aria-modal="true"

@@ -244,13 +244,17 @@
   transform: scaleY(-1);
 }
 
+/* The straight run between the two arcs. It has to be the exact value the arc
+   strokes reach at the joint, which is white at 10%: it used to be
+   --color-border, a different colour entirely, so the line stepped where it
+   met each curve and read as a stray mark that stopped short of both ends. */
 .melt-line {
   position: absolute;
   left: 0;
   top: var(--vice-melt);
   bottom: var(--vice-melt);
   width: 1px;
-  background: var(--color-border);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 /* ── content region ─────────────────────────────────────────────── */
@@ -617,6 +621,10 @@
 .sidenav-add {
   width: 22px;
   height: 22px;
+  /* Sits over the clip-count column in the rows below rather than over the
+     heading's own right edge: measured, the button's centre was 3.4px left of
+     a single-digit count, which is exactly enough to read as misaligned. */
+  margin-right: -4px;
   display: grid;
   place-items: center;
   border: none;

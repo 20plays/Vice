@@ -109,6 +109,16 @@ export function ClipCard({
         if (!actions.onContextMenu) return;
         e.preventDefault();
         actions.onContextMenu(clip, {x: e.clientX, y: e.clientY});
+      }}
+      onClick={e => {
+        // The whole card opens the clip, not just the thumbnail. Anything that
+        // already does something of its own is left alone: the action row, the
+        // rename field, and the title, which takes a double-click to rename and
+        // would never get its second click if the first one opened the viewer.
+        if (renaming) return;
+        const target = e.target as HTMLElement;
+        if (target.closest('button, a, input, textarea, .clip-name')) return;
+        actions.onOpen?.(clip);
       }}>
       <button
         type="button"

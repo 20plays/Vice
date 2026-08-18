@@ -5,8 +5,10 @@ import {api} from '../lib/api';
 import {usePlaylistDropTarget} from '../lib/clipDrag';
 import {formatDuration} from '../lib/format';
 import {PlaylistModal, type PlaylistDraft} from './PlaylistModal';
+import {ContextMenu} from './ContextMenu';
+import {Modal} from './Modal';
 import {Wordmark} from './Wordmark';
-import type {ViewName} from '../lib/types';
+import type {Playlist, ViewName} from '../lib/types';
 import {
   IconAbout,
   IconClips,
@@ -29,6 +31,12 @@ const NAV: {view: ViewName; label: string; Icon: typeof IconHome}[] = [
   {view: 'about', label: 'About', Icon: IconAbout},
 ];
 
+/* Emoji a game playlist would actually reach for. Deliberately not the generic
+   smiley and thumbs-up set: each of these has to read as a kind of game at
+   15px in a sidebar. */
+const GAME_EMOJI = ['\u{1F3AE}', '\u{1F579}\uFE0F', '\u{1F3C6}', '\u2694\uFE0F',
+  '\u{1F4A5}', '\u{1F3CE}\uFE0F', '\u{1F680}', '\u{1F47E}'];
+
 export function SideNav({
   onShowTutorial,
   onShowUpdate,
@@ -38,6 +46,9 @@ export function SideNav({
 }) {
   const {state, dispatch, notify, refreshPlaylists} = useStore();
   const [creating, setCreating] = useState(false);
+  const [menu, setMenu] = useState<{playlist: Playlist; at: {x: number; y: number}} | null>(null);
+  const [editing, setEditing] = useState<Playlist | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Playlist | null>(null);
   const {view, currentPlaylistId, searchQuery, playlists, clips, config} = state;
 
   const buffer = config?.recording?.buffer_duration as number | undefined;
@@ -109,6 +120,7 @@ export function SideNav({
               playlist={playlist}
               active={currentPlaylistId === playlist.id}
               onOpen={() => dispatch({type: 'setView', view: 'clips', playlistId: playlist.id})}
+              onContextMenu={at => setMenu({playlist, at})}
               onDone={(message, tone) =>
                 notify({
                   kind: tone === 'error' ? 'error' : 'info',
@@ -170,6 +182,122 @@ export function SideNav({
           setCreating(false);
         }}
       />
+      {menu ? (
+        <ContextMenu
+          at={menu.at}
+          heading={menu.playlist.name}
+          emptyLabel="No actions"
+          onClose={() => setMenu(null)}
+          quick={GAME_EMOJI.map(glyph => ({
+            id: glyph,
+            glyph,
+            title: `Use ${glyph}`,
+            active: menu.playlist.emoji === glyph,
+            onSelect: () => {
+              const target = menu.playlist;
+              void api
+                .updatePlaylist(target.id, {emoji: glyph})
+                .then(async result => {
+                  if (result?.ok === false) {
+                    throw new Error(result.error || 'Could not set the emoji');
+                  }
+                  await refreshPlaylists();
+                })
+                .catch((err: Error) =>
+                  notify({
+                    kind: 'error',
+                    title: 'Could not set the emoji',
+                    detail: err.message,
+                    tone: 'error',
+                    holdMs: 7000,
+                  }),
+                );
+            },
+          }))}
+          items={[
+            {
+              id: 'open',
+              label: 'Open',
+              onSelect: () =>
+                dispatch({type: 'setView', view: 'clips', playlistId: menu.playlist.id}),
+            },
+            {id: 'edit', label: 'Edit playlist', onSelect: () => setEditing(menu.playlist)},
+            {id: 'sep', separator: true},
+            {
+              id: 'delete',
+              label: 'Delete playlist',
+              danger: true,
+              onSelect: () => setConfirmDelete(menu.playlist),
+            },
+          ]}
+        />
+      ) : null}
+
+      <PlaylistModal
+        open={editing !== null}
+        editing={editing}
+        onClose={() => setEditing(null)}
+        onSubmit={async (draft: PlaylistDraft) => {
+          if (!editing) return;
+          const result = await api.updatePlaylist(editing.id, draft);
+          if (result.ok === false) throw new Error(result.error || 'Could not update the playlist');
+          await refreshPlaylists();
+          notify({kind: 'info', title: 'Playlist updated', tone: 'accent', holdMs: 3000});
+          setEditing(null);
+        }}
+      />
+
+      <Modal
+        open={confirmDelete !== null}
+        title="Delete this playlist?"
+        onClose={() => setConfirmDelete(null)}
+        footer={
+          <>
+            <button type="button" className="btn btn-quiet" onClick={() => setConfirmDelete(null)}>
+              Keep it
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger-solid"
+              onClick={() => {
+                const target = confirmDelete;
+                setConfirmDelete(null);
+                if (!target) return;
+                void api
+                  .deletePlaylist(target.id)
+                  .then(async () => {
+                    await refreshPlaylists();
+                    if (currentPlaylistId === target.id) {
+                      dispatch({type: 'setView', view: 'clips', playlistId: null});
+                    }
+                    notify({
+                      kind: 'info',
+                      title: 'Playlist deleted',
+                      tone: 'neutral',
+                      holdMs: 3000,
+                    });
+                  })
+                  .catch((err: Error) =>
+                    notify({
+                      kind: 'error',
+                      title: 'Could not delete the playlist',
+                      detail: err.message,
+                      tone: 'error',
+                      holdMs: 7000,
+                    }),
+                  );
+              }}>
+              Delete
+            </button>
+          </>
+        }>
+        <p>
+          The clips themselves stay put. Only the playlist goes.
+          {confirmDelete?.kind === 'auto'
+            ? ' This one was created automatically, so Vice will not build it again for this game.'
+            : ''}
+        </p>
+      </Modal>
     </nav>
   );
 }
@@ -179,11 +307,13 @@ function PlaylistRow({
   playlist,
   active,
   onOpen,
+  onContextMenu,
   onDone,
 }: {
-  playlist: import('../lib/types').Playlist;
+  playlist: Playlist;
   active: boolean;
   onOpen: () => void;
+  onContextMenu: (at: {x: number; y: number}) => void;
   onDone: (message: string, tone: 'accent' | 'error') => void;
 }) {
   const drop = usePlaylistDropTarget(playlist, onDone);
@@ -196,6 +326,10 @@ function PlaylistRow({
         data-received={drop.caught || undefined}
         aria-current={active ? 'page' : undefined}
         onClick={onOpen}
+        onContextMenu={e => {
+          e.preventDefault();
+          onContextMenu({x: e.clientX, y: e.clientY});
+        }}
         {...drop.props}>
         <span className="playlist-mark" aria-hidden="true">
           {playlist.emoji || <IconPlaylist size={14} />}

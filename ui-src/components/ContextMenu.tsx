@@ -15,16 +15,29 @@ export interface MenuItem {
  * A menu anchored to the pointer, clamped so it never opens off screen.
  * Dismisses on outside click, Escape, scroll or resize.
  */
+export interface QuickAction {
+  id: string;
+  /** Shown as the button's face. An emoji, not a label. */
+  glyph: string;
+  title: string;
+  active?: boolean;
+  onSelect: () => void;
+}
+
 export function ContextMenu({
   at,
   heading,
   items,
+  quick,
   emptyLabel,
   onClose,
 }: {
   at: {x: number; y: number};
   heading: string;
   items: MenuItem[];
+  /** A strip of one-tap actions above the list. A row, because eight emoji
+   *  stacked as menu items is a scroll, not a picker. */
+  quick?: QuickAction[];
   emptyLabel: string;
   onClose: () => void;
 }) {
@@ -67,6 +80,25 @@ export function ContextMenu({
   return (
     <div className="ctx-menu" ref={ref} style={{left: pos.x, top: pos.y}} role="menu">
       <p className="ctx-heading">{heading}</p>
+      {quick?.length ? (
+        <div className="ctx-quick">
+          {quick.map(action => (
+            <button
+              key={action.id}
+              type="button"
+              className="ctx-quick-btn"
+              data-active={action.active || undefined}
+              title={action.title}
+              aria-label={action.title}
+              onClick={() => {
+                action.onSelect();
+                onClose();
+              }}>
+              {action.glyph}
+            </button>
+          ))}
+        </div>
+      ) : null}
       {choosable.length === 0 ? (
         <p className="ctx-empty">{emptyLabel}</p>
       ) : (

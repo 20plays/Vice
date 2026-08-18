@@ -262,6 +262,8 @@ kbd {
   border-radius: var(--radius-container);
   overflow: hidden;
   background: var(--raised);
+  /* The whole card opens the clip, so the whole card has to look like it does. */
+  cursor: pointer;
   transition:
     transform var(--duration-medium) var(--ease-standard),
     box-shadow var(--duration-medium) var(--ease-standard),
@@ -364,6 +366,11 @@ kbd {
 
 .clip-name {
   margin: 0;
+  /* Excluded from the card's open-on-click, because renaming needs the second
+     click of a double-click to still be there. */
+  cursor: text;
+  width: fit-content;
+  max-width: 100%;
   font-size: 13.5px;
   font-weight: 600;
   letter-spacing: -0.005em;
@@ -504,6 +511,39 @@ kbd {
   from {
     opacity: 0;
     transform: translateY(12px) scale(0.96);
+  }
+}
+
+/* Leaving is the entrance run backwards and a little quicker, because a
+   dismissal that lingers feels unresponsive while an arrival that hurries
+   feels cheap. Both surfaces animate, or the box would slide out of a scrim
+   that is still fully painted. */
+.scrim[data-closing] {
+  animation: scrim-out var(--duration-fast) linear forwards;
+}
+
+.modal[data-closing] {
+  animation: modal-out var(--duration-fast) var(--ease-standard) forwards;
+  pointer-events: none;
+}
+
+@keyframes scrim-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scrim[data-closing],
+  .modal[data-closing] {
+    animation: none;
   }
 }
 

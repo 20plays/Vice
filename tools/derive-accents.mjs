@@ -57,6 +57,15 @@ const TERTIARY_HUE_SHIFT = 60;
 // #5f3c51. Two of the five swatches would have had matching buttons.
 const STRATEGY = process.env.VICE_ACCENT_STRATEGY ?? 'tied';
 
+// M3's dark primary is tone 80, which is right for four of the five. Blue is
+// gamut-clipped there: at hue 254 sRGB cannot hold the chroma, so asking for
+// 40, 48, 64 or 80 all return the identical #9fcaff at a realized 37. Chroma
+// cannot fix it and the result reads pale next to the others. Dropping the
+// tone frees the chroma back up (40.1 at 78 and below) and darkens it, which
+// is what "less pale" actually needs. Measured, not guessed.
+const PRIMARY_TONE = {blue: 74};
+const DEFAULT_PRIMARY_TONE = 80;
+
 function scheme(hex) {
   const src = Hct.fromInt(argbFromHex(hex));
   const h = src.hue;
@@ -113,7 +122,8 @@ const contrast = (a, b) => {
 const rows = Object.entries(SOURCE).map(([name, source]) => {
   const s = scheme(source);
   const g = role => hexFromArgb(role.getArgb(s));
-  const palette = (p, tone) => hexFromArgb(s[p].tone(tone));
+  const palette = (p, t) => hexFromArgb(s[p].tone(t));
+  const tone = PRIMARY_TONE[name] ?? DEFAULT_PRIMARY_TONE;
 
   return {
     name,
@@ -121,13 +131,13 @@ const rows = Object.entries(SOURCE).map(([name, source]) => {
     // base and bg keep these names because two other files depend on them:
     // BootThemeTests regexes them out of accents.ts, and index.html carries its
     // own copy for the pre-paint cover.
-    base: g(M.primary),
+    base: palette('primaryPalette', tone),
     onBase: g(M.onPrimary),
     // M3 expresses hover and press as state layers over the fill. Vice paints
     // solid colours because several of these sit under a CSS transition, so the
-    // ends of the ramp come off the palette directly.
-    hover: palette('primaryPalette', 86),
-    active: palette('primaryPalette', 74),
+    // ends of the ramp come off the palette directly, either side of the base.
+    hover: palette('primaryPalette', Math.min(tone + 6, 100)),
+    active: palette('primaryPalette', Math.max(tone - 6, 0)),
     bg: g(M.surface),
     surfaceLowest: g(M.surfaceContainerLowest),
     surfaceLow: g(M.surfaceContainerLow),
@@ -206,7 +216,7 @@ for (const r of rows) {
     `${r.name.padEnd(7)} ${r.source} -> ${r.base} (hue ${hue(r.base)})\n` +
     `        bg ${r.bg}  card ${r.surfaceLow}  ` +
     `button ${r.secondaryContainer} (hue ${hue(r.secondaryContainer)}) on ${r.onSecondaryContainer}  ` +
-    `chip ${r.tertiaryContainer}`,
+    `chip ${r.primaryContainer}`,
   );
 }
 

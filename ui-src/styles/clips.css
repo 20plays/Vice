@@ -234,6 +234,40 @@
   cursor: not-allowed;
 }
 
+/* The quick strip: one tap sets a playlist's emoji without opening the editor.
+   Wraps, because the row is wider than the menu on a narrow window. */
+.ctx-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 6px 6px;
+}
+
+.ctx-quick-btn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: var(--recessed);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--vice-ease-spring);
+}
+
+.ctx-quick-btn:hover {
+  background: var(--control-hover);
+  transform: scale(1.14);
+}
+
+.ctx-quick-btn[data-active] {
+  background: var(--color-accent);
+}
+
 .ctx-sep {
   height: 1px;
   margin: 5px var(--spacing-2);

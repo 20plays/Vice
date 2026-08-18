@@ -54,10 +54,10 @@ export interface AccentRamp {
 
 export const ACCENTS: Record<AccentName, AccentRamp> = {
   blue: {
-    base: '#9fcaff',
+    base: '#8ab9f3',
     onBase: '#003259',
-    hover: '#bed9ff',
-    active: '#8ab9f3',
+    hover: '#9fcaff',
+    active: '#79a9e2',
     bg: '#11131a',
     surfaceLowest: '#0c0e15',
     surfaceLow: '#191b23',

@@ -2,6 +2,7 @@ import {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
 
 import {api} from '../lib/api';
 import {useEscape} from '../lib/escape';
+import {useExitTransition} from '../lib/exit';
 import {formatBytes, formatDuration} from '../lib/format';
 import {
   clipNeedsProxy,
@@ -57,7 +58,16 @@ export interface ViewerProps {
  * them out together removes the measurement, and with it that whole hazard.
  */
 export function Viewer(props: ViewerProps) {
-  const {clip, clips, highlights, onHighlightsChange, onSelect, onClose} = props;
+  const {clips, highlights, onHighlightsChange, onSelect, onClose} = props;
+
+  // The viewer is held on screen for the length of its exit so it animates
+  // away instead of vanishing between frames. props.clip is already null by
+  // then, so the last one is kept to render against; the video is stopped the
+  // moment closing starts, or it would keep playing audio behind the fade.
+  const {mounted, closing} = useExitTransition(props.clip !== null, 320);
+  const lastClip = useRef(props.clip);
+  if (props.clip) lastClip.current = props.clip;
+  const clip = props.clip ?? lastClip.current;
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -134,6 +144,10 @@ export function Viewer(props: ViewerProps) {
   useEscape(open, onClose);
 
   useEffect(() => {
+    if (closing) videoRef.current?.pause();
+  }, [closing]);
+
+  useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -153,7 +167,7 @@ export function Viewer(props: ViewerProps) {
     return () => document.removeEventListener('keydown', onKey);
   }, [open, step, addHighlight]);
 
-  if (!clip) return null;
+  if (!mounted || !clip) return null;
 
   const duration = position.duration;
   const percent = duration > 0 ? (position.current / duration) * 100 : 0;
@@ -246,9 +260,15 @@ export function Viewer(props: ViewerProps) {
   return (
     <div
       className="scrim viewer-scrim"
+      data-closing={closing || undefined}
       onMouseDown={e => e.target === e.currentTarget && onClose()}>
       <div className="viewer-stack">
-        <div className="modal viewer" role="dialog" aria-modal="true" aria-label={clipTitle(clip)}>
+        <div
+          className="modal viewer"
+          data-closing={closing || undefined}
+          role="dialog"
+          aria-modal="true"
+          aria-label={clipTitle(clip)}>
           <header className="viewer-head">
             <div className="viewer-heading">
               <h2>{clipTitle(clip)}</h2>
