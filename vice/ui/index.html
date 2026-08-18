@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="dark">
 <title>Vice</title>
+<style>
+/* Syne ExtraBold, SIL Open Font License 1.1, subset to the four glyphs of
+   the wordmark: 624 bytes. Inlined rather than linked because the boot
+   cover paints before any font request could finish, and a fallback flash
+   on the loading screen defeats the loading screen. */
+@font-face{font-family:'Syne VICE';font-weight:800;font-style:normal;font-display:block;src:url(data:font/woff2;base64,d09GMk9UVE8AAAJwAAwAAAAAA+wAAAInAAIzMwAAAAAAAAAAAAAAAAAAAAAAAAAADYJwGhYbIBwqBmAATAE2AiQDFAQGBQYHIBsVAyiOw7jh27yJxV0rwfOk1/+5M0melN0PsyPQwaxcSR07mJPdWTTAv69aeB5vgQ50/E0mPrG3VTruEogu+qgT7fCBJxRQggFJus23R1iHGAgSCdLp7SvuCI5CRHJ6zJs8qkZpibIVh49UCYoRFM8kKKGCktpWzdT3Mx17zj4snjoi2sI1PXLWBpJvBubhiHhDJ0+vW7Nu7drWJLDuXcCFOreqoogafzgZM27mxGHDYxyHT5ncbTXVmMTakaNGrzi0j9f4DyEGs8YnUhlAeSpSlUa4Ijl9ZizYE/v8LqgVspfNnqdkm8XFnQ9mH/38dq/39FZD7KRidnOZU7+N8++02Wwm3R7c4XAps90zPefbDv9jOcViYbugqd1td5sFLYNwkGPafzE9tpbKvmXumoOhCD/iPImsNN0Ti+N+dKnpHl/tZcfLv4z4obhv1kb8lOwXQfWw+ekFfsR37RHPHovttseC3a494WVHr4cQIBMAUAiCgyBAOsUpibRs3bEnqTgAyQBQSUUqo/KyJw6bOZnCWnDs6Ee6NC6olaov0IHlyGA6SEXgCvRqvuQqLeit9yS+gb4gP5RWPqv529JoQAETH42859AYSCcVhaIFrWhH72QID/Uudb4TxMU9ql69nE2LDg/Jaf4vVeuPAE/ars0CeN6qZYfEk8TF1BH6JOChABDwmVKvaUxsPaRR5Mpz+rvlae7MpLUcppezHB+6ggsED40vOR0A) format('woff2')}
+</style>
 <link rel="stylesheet" href="/styles/app.css?v=__VICE_VERSION__">
 <script>
 // The accent is a per-install choice held in localStorage, and the boot cover
@@ -12,8 +19,8 @@
 // near-black and snaps to the themed background the moment React mounts.
 // Kept in step with ui-src/theme/accents.ts by a test.
 (function () {
-  var BG = {blue:'#15171f',purple:'#1a151c',green:'#0f1a18',red:'#1d1511',orange:'#1c160f'};
-  var AC = {blue:'#45a7fe',purple:'#a68aff',green:'#46ba8a',red:'#fc6d66',orange:'#ef7e3e'};
+  var BG = {blue:'#11131a',purple:'#161219',green:'#0c1513',red:'#1c110d',orange:'#1b120a'};
+  var AC = {blue:'#9fcaff',purple:'#d0bcff',green:'#85d7ae',red:'#ffb3ad',orange:'#ffb690'};
   var name = null;
   try { name = localStorage.getItem('vice-theme'); } catch (e) { name = null; }
   if (!BG[name]) name = 'blue';
@@ -36,7 +43,7 @@
     </svg>
     <span class="boot-orbit"></span>
   </div>
-  <div class="boot-word">Vice</div>
+  <div class="boot-word wordmark">VICE</div>
   <div class="boot-bar"><span></span></div>
 </div>
 

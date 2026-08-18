@@ -64,10 +64,21 @@ body {
   pointer-events: none;
 }
 
+/* The wordmark. The face is declared in index.html as an inlined data URI so
+   it is available to the first paint; this only sets how it is used. */
+.wordmark {
+  font-family: 'Syne VICE', var(--font-family-heading);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  /* The subset has no lowercase, so a stray lowercase string would render as
+     tofu rather than quietly falling back. */
+  text-transform: uppercase;
+}
+
 .boot-word {
-  font-family: var(--font-family-heading);
-  font-size: var(--text-heading-3-size);
-  letter-spacing: 0.02em;
+  font-size: 30px;
+  color: var(--boot-accent, #9fcaff);
 }
 
 .boot-mark {
@@ -156,31 +167,46 @@ body {
   height: 100%;
 }
 
-/* Raised surfaces separate from the background by tone and a hairline, the
-   way Material's surface containers do. No drop shadow: an app window is not
-   a stack of floating cards.
+/* The surface ladder, straight off the M3 scheme.
+   Containers separate by tone and a hairline. No drop shadow: an app window is
+   not a stack of floating cards.
 
-   The fill is the accent's soft tone rather than the neutral theme's gray, so
-   a resting card belongs to the theme without competing with it. It carries
-   the background's hue, one step up in lightness, which is what keeps the
-   window a single tint ladder instead of a gray object on a coloured page.
+   The names are Vice's, the values are M3 roles. A control at rest wears
+   secondary-container, a genuinely coloured tonal rung, rather than a surface
+   role: that was the bug behind buttons looking unfinished, and it is why
+   --control and --raised no longer resolve to the same family.
 
-   --raised-hover used to be --color-accent-muted, which the dark neutral
-   theme defines as #262626, the same value as the surface it sat on. Every
-   hover built on it repainted the element in the colour it already was. */
+   Filled elements carry no outline. M3 gives a filled card "surface-container
+   fill, no border" and reserves outline-variant for the outlined variant: you
+   pick fill or outline, not both. Vice used to do both because near-neutral
+   grays could not separate on tone alone, and the leftover hairline is what
+   made the buttons look grubby once they had real tone. Outlines survive only
+   where M3 uses them, on text fields and dividers. */
 .vice-app {
-  --raised: var(--vice-soft);
-  --raised-hover: var(--vice-soft-hover);
-  --raised-edge: inset 0 0 0 1px var(--color-border);
-  --raised-edge-hover: inset 0 0 0 1px var(--color-border);
-  /* A control at rest: quiet buttons, inputs, tracks. One step further up
-     again, so it reads both on a card and on the bare page background. */
-  --control: var(--vice-soft-raised);
-  --control-hover: var(--vice-soft-hover);
-  /* A control that reads as recessed into its card instead of sitting on it:
-     a select at rest, a switch that is off, an inline code run. Material's
-     lowest surface container, which here is the page tone itself. */
-  --recessed: var(--vice-bg);
+  /* content: clip cards, settings cards, panels */
+  --raised: var(--vice-surface-low);
+  --raised-hover: var(--vice-surface-high);
+
+  /* controls at rest, and the text that goes on them */
+  --control: var(--vice-secondary-container);
+  --on-control: var(--vice-on-secondary-container);
+  --control-hover: var(--vice-surface-highest);
+
+  /* the second tonal rung, so a chip and a tile are not the same paint.
+     primary-container rather than tertiary: tertiary sits at accent+60, which
+     put purple chips on the blue theme and read as a different theme leaking
+     in rather than as variety. */
+  --tertiary: var(--vice-primary-container);
+  --on-tertiary: var(--vice-on-primary-container);
+
+  /* recessed into a container: a select at rest, a switch that is off */
+  --recessed: var(--vice-surface-lowest);
+
+  /* The two M3 corner stops above --radius-container. Defined here rather than
+     in the theme because DesignTokenTests reads the built stylesheet, and
+     defineTheme's tokens are emitted at runtime where it cannot see them. */
+  --radius-xl: 2rem; /* 32px, M3 extra-large-increased */
+  --radius-xxl: 3rem; /* 48px, M3 extra-extra-large */
 }
 
 /* ── dragging a clip onto a playlist ────────────────────────────── */

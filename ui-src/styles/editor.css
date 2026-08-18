@@ -21,7 +21,7 @@
   min-width: 0;
   min-height: 0;
   border-radius: var(--radius-container);
-  background: var(--vice-soft);
+  background: var(--vice-surface-low);
   overflow: hidden;
 }
 
@@ -740,7 +740,7 @@
   justify-content: center;
   gap: 1px;
   padding-left: var(--spacing-2);
-  background: var(--vice-soft);
+  background: var(--vice-surface-low);
   cursor: context-menu;
 }
 
@@ -785,7 +785,7 @@
 
 .ed-item.selected {
   box-shadow:
-    0 0 0 2px var(--vice-soft),
+    0 0 0 2px var(--vice-surface-low),
     0 0 0 4px var(--color-accent);
 }
 
@@ -1108,7 +1108,7 @@
   margin: 0;
   padding: var(--spacing-3);
   border-radius: var(--radius-inner);
-  background: var(--vice-soft);
+  background: var(--vice-surface-low);
   font-size: 11.5px;
   line-height: 1.5;
   color: var(--color-text-accent);

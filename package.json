@@ -16,7 +16,7 @@
     "build": "vite build",
     "dev": "vite build --watch",
     "typecheck": "tsc --noEmit",
-    "accents": "node tools/derive-accents.mjs"
+    "accents": "node --import ./tools/mcu-resolve.mjs tools/derive-accents.mjs"
   },
   "dependencies": {
     "@astryxdesign/cli": "^0.4.1",
@@ -28,6 +28,7 @@
   },
   "devDependencies": {
     "@fontsource-variable/figtree": "^5.3.0",
+    "@material/material-color-utilities": "^0.4.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react-swc": "^4.3.3",

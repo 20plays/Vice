@@ -28,7 +28,7 @@
   gap: 4px;
   padding: 4px;
   border-radius: var(--radius-full);
-  background: var(--vice-soft);
+  background: var(--vice-surface-low);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -108,7 +108,6 @@
   padding: var(--spacing-4) var(--spacing-5) var(--spacing-2);
   border-radius: var(--radius-container);
   background: var(--raised);
-  box-shadow: var(--raised-edge);
   scroll-margin-top: var(--spacing-3);
 }
 
@@ -278,7 +277,7 @@
 }
 
 .select:hover:not(:disabled) {
-  box-shadow: inset 0 0 0 1px var(--color-border);
+  box-shadow: inset 0 0 0 1px var(--vice-outline);
 }
 
 .select:focus-visible {
@@ -337,7 +336,7 @@ select option {
   border: none;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--vice-soft);
+  box-shadow: 0 0 0 3px var(--vice-surface-low);
   cursor: grab;
   transition: transform var(--duration-fast) var(--vice-ease-spring);
 }
@@ -556,7 +555,7 @@ select option {
 }
 
 .key-capture:hover {
-  box-shadow: inset 0 0 0 1px var(--color-border);
+  box-shadow: inset 0 0 0 1px var(--vice-outline);
 }
 
 .key-capture[data-compact] {
@@ -642,7 +641,7 @@ select option {
 
 .swatch[data-active] {
   box-shadow:
-    0 0 0 2px var(--vice-soft),
+    0 0 0 2px var(--vice-surface-low),
     0 0 0 4px var(--color-text-primary);
 }
 

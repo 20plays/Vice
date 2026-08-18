@@ -60,7 +60,7 @@
   border-radius: var(--radius-full);
   background: var(--control);
   color: var(--color-text-secondary);
-  box-shadow: inset 0 0 0 1px var(--color-border);
+  box-shadow: inset 0 0 0 1px var(--vice-outline);
   transition: box-shadow var(--duration-fast) var(--ease-standard);
 }
 

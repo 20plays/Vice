@@ -5,6 +5,7 @@ import {api} from '../lib/api';
 import {usePlaylistDropTarget} from '../lib/clipDrag';
 import {formatDuration} from '../lib/format';
 import {PlaylistModal, type PlaylistDraft} from './PlaylistModal';
+import {Wordmark} from './Wordmark';
 import type {ViewName} from '../lib/types';
 import {
   IconAbout,
@@ -45,7 +46,7 @@ export function SideNav({
     <nav className="sidenav" aria-label="Main">
       <div className="sidenav-brand">
         <IconMark size={19} className="sidenav-mark" />
-        <span>Vice</span>
+        <Wordmark height={15} />
       </div>
 
       <div className="sidenav-search">

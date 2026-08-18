@@ -3,6 +3,7 @@ import {useMemo, useState} from 'react';
 import {useStore} from '../state/store';
 import {copyToClipboard} from '../lib/clipboard';
 import {formatBytes, formatLengthLong} from '../lib/format';
+import {Wordmark} from '../components/Wordmark';
 import {Modal} from '../components/Modal';
 import {IconMark} from '../components/Icons';
 
@@ -63,7 +64,9 @@ export function About() {
           <IconMark size={30} />
         </span>
         <div>
-          <h2>Vice</h2>
+          <h2>
+            <Wordmark height={26} />
+          </h2>
           <p>Linux-first, open source game clipping.</p>
           <div className="about-chips">
             <span className="about-chip mono">{version || 'unknown'}</span>

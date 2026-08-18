@@ -1,78 +1,36 @@
-// Derives Vice's five accent ramps and writes ui-src/theme/accents.ts.
+// Derives Vice's five accent schemes and writes ui-src/theme/accents.ts.
 //
-// Run with: node tools/derive-accents.mjs
+// Run with: npm run accents
 //
-// Why this exists rather than five hand-picked hexes: the neutral theme places
-// its dark-mode colours on a documented ramp (chroma x0.85 off the source hue),
-// tuned to sit on the #1b1b1b body. Vice's original accents were chosen against
-// a near-black #050810 void with glow behind them, so they read hot on warm
-// grays. Each accent keeps its own hue and moves to neutral's tonal position,
-// which is why the violet purple stays violet instead of snapping to the
-// palette's magenta.
+// Every colour in the UI comes from here. Each of the five swatches is a real
+// Material 3 dark scheme built from that swatch as the seed, so cards, inactive
+// buttons and the page background are tonal roles rather than values anybody
+// picked. Before this the surfaces were a hand-rolled OKLCH ramp at chroma
+// 0.024, which is gray with a rumour of hue, and an inactive control wore a
+// surface role instead of a container one. That is the whole reason the buttons
+// looked unfinished.
 
-import {writeFileSync} from 'node:fs';
+import {readFileSync, writeFileSync} from 'node:fs';
 
-const srgbToLinear = c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-const linearToSrgb = c => (c <= 0.0031308 ? c * 12.92 : 1.055 * c ** (1 / 2.4) - 0.055);
+// material-color-utilities 0.4.0 exports only its barrel, and the barrel pulls
+// in scheme/*.js, which use extensionless relative imports that Node's ESM
+// resolver rejects. Locate the package through the entry its exports map does
+// allow, then import the clean submodules as siblings. tools/mcu-resolve.mjs
+// handles the same bug for the package's own internal imports.
+const entry = import.meta.resolve('@material/material-color-utilities');
+const at = p => new URL(p, entry).href;
 
-const hexToRgb = hex => [0, 2, 4].map(i => parseInt(hex.slice(1 + i, 3 + i), 16) / 255);
+const {Hct} = await import(at('./hct/hct.js'));
+const {TonalPalette} = await import(at('./palettes/tonal_palette.js'));
+const {DynamicScheme} = await import(at('./dynamiccolor/dynamic_scheme.js'));
+const {Variant} = await import(at('./dynamiccolor/variant.js'));
+const {MaterialDynamicColors: M} = await import(
+  at('./dynamiccolor/material_dynamic_colors.js')
+);
+const {argbFromHex, hexFromArgb} = await import(at('./utils/string_utils.js'));
 
-const rgbToHex = rgb =>
-  '#' + rgb.map(v => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('');
-
-function rgbToOklab([r, g, b]) {
-  const [lr, lg, lb] = [r, g, b].map(srgbToLinear);
-  const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
-  const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
-  const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
-  return [
-    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
-    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
-    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
-  ];
-}
-
-function oklabToRgb([L, a, bb]) {
-  const l = (L + 0.3963377774 * a + 0.2158037573 * bb) ** 3;
-  const m = (L - 0.1055613458 * a - 0.0638541728 * bb) ** 3;
-  const s = (L - 0.0894841775 * a - 1.291485548 * bb) ** 3;
-  return [
-    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
-    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
-    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
-  ].map(linearToSrgb);
-}
-
-const toOklch = ([L, a, b]) => [L, Math.hypot(a, b), (Math.atan2(b, a) * 180 / Math.PI + 360) % 360];
-const toOklab = ([L, C, H]) => [L, C * Math.cos(H * Math.PI / 180), C * Math.sin(H * Math.PI / 180)];
-const hexToOklch = hex => toOklch(rgbToOklab(hexToRgb(hex)));
-const inGamut = rgb => rgb.every(v => v >= -0.0001 && v <= 1.0001);
-
-// Reduce chroma until the colour fits sRGB, so a requested L/H is never
-// silently clipped into a different hue.
-function oklchToHex([L, C, H]) {
-  if (inGamut(oklabToRgb(toOklab([L, C, H])))) return rgbToHex(oklabToRgb(toOklab([L, C, H])));
-  let lo = 0, hi = C;
-  for (let i = 0; i < 40; i++) {
-    const mid = (lo + hi) / 2;
-    if (inGamut(oklabToRgb(toOklab([L, mid, H])))) lo = mid; else hi = mid;
-  }
-  return rgbToHex(oklabToRgb(toOklab([L, lo, H])));
-}
-
-const luminance = rgb => {
-  const [R, G, B] = rgb.map(srgbToLinear);
-  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
-};
-
-function contrast(a, b) {
-  const la = luminance(hexToRgb(a));
-  const lb = luminance(hexToRgb(b));
-  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
-}
-
-// The accents Vice shipped through 2.7.2. Hue is taken from these; lightness
-// and chroma are not.
+// The accents Vice has shipped since 2.0. These are seeds now, not values: the
+// hue is what survives into the scheme, the lightness and chroma do not.
 const SOURCE = {
   blue: '#0099ff',
   purple: '#8b5cf6',
@@ -81,201 +39,247 @@ const SOURCE = {
   orange: '#f97316',
 };
 
-// Surfaces the accent has to survive, from neutralTheme.ts.
-const BODY = '#1b1b1b';
-const SURFACE = '#262626';
-const ON_ACCENT = '#171717';
+// Expressive's palette chromas, read out of
+// node_modules/@material/material-color-utilities/dynamiccolor/dynamic_scheme.js
+// at version 0.4.0. Re-check them after any bump: they are not exported.
+const CHROMA = {primary: 40, secondary: 24, tertiary: 32, neutral: 8, neutralVariant: 12};
+const NEUTRAL_HUE_SHIFT = 15;
+const TERTIARY_HUE_SHIFT = 60;
 
-const ACCENT_L = 0.71;   // uniform, so all five read equally bright in the swatch row
-const CHROMA = 0.85;     // neutral's documented dark-ramp chroma reduction
-const AMBIENT_L = 0.30;  // a wash, not a glow
-const AMBIENT_C_MAX = 0.075;
-// The page background, not the cards. Cards stay neutral and separate by tone
-// the way Material's surface containers do; the hue lives underneath them so
-// the whole window feels like it belongs to the theme without any single
-// element looking tinted.
+// 'tied' keeps every palette on the accent's own hue. 'detached' uses
+// Expressive's own rotations, which the library documents as "intentionally
+// detached from the source color".
 //
-// The hue is offset from the accent rather than matching it. A background in
-// the accent's own hue reads as a washed-out version of the accent; a
-// neighbouring hue reads as a considered pairing. 25 degrees is enough to
-// separate them and small enough to stay harmonious.
-const BG_L = 0.205;        // lifted off pure black so the wash has somewhere to land
-const BG_C = 0.016;        // present at a glance only when you look for it
-const BG_HUE_OFFSET = 25;
+// Vice ships tied, for two reasons. Andrew asked for "a second, paler accent
+// colour", and a rotated secondary is not a second version of the accent, it is
+// a different colour. More concretely, Expressive's rotation table maps blue
+// (hue 254) and purple (hue 300) onto almost the same secondary: #5f3c52 and
+// #5f3c51. Two of the five swatches would have had matching buttons.
+const STRATEGY = process.env.VICE_ACCENT_STRATEGY ?? 'tied';
 
-// The second, quieter tone: what an inactive control or a resting card is
-// filled with. Material's surface containers, not a second brand colour.
-//
-// It carries the background's hue rather than the accent's own, so the window
-// is one tint ladder instead of two competing ones, and the accent stays the
-// only thing in the room wearing its own hue. Chroma climbs slightly with
-// lightness because a pale tone needs more of it to read as tinted at all.
-//
-// The lightness stops are the neutral grays these replace (#262626 and up), so
-// the tonal ladder is unchanged and the only difference is that it is no longer
-// gray. SOFT is a resting surface, RAISED is a control sitting on one, HOVER is
-// where either goes under the pointer.
-const SOFT_L = 0.269;
-const SOFT_C = 0.024;
-const SOFT_RAISED_L = 0.315;
-const SOFT_RAISED_C = 0.028;
-const SOFT_HOVER_L = 0.355;
-const SOFT_HOVER_C = 0.032;
+function scheme(hex) {
+  const src = Hct.fromInt(argbFromHex(hex));
+  const h = src.hue;
+  const common = {
+    sourceColorHct: src,
+    variant: Variant.EXPRESSIVE,
+    contrastLevel: 0,
+    isDark: true,
+    // The 2025 spec resolves surfaceContainerLowest to #000000, and Vice's
+    // ambient wash needs somewhere to land, so the background is never allowed
+    // to reach pure black. 2021 also keeps a genuinely coloured secondary
+    // container, which is the rung this whole change exists to add.
+    specVersion: '2021',
+  };
+  if (STRATEGY === 'detached') {
+    // Expressive derives primary from sourceHue + 240, which turns the blue
+    // swatch green. The swatches are labelled by colour name in Settings, so
+    // primary is pinned to the seed's hue even in this mode.
+    return new DynamicScheme({
+      ...common,
+      primaryPalette: TonalPalette.fromHueAndChroma(h, CHROMA.primary),
+    });
+  }
+  return new DynamicScheme({
+    ...common,
+    primaryPalette: TonalPalette.fromHueAndChroma(h, CHROMA.primary),
+    secondaryPalette: TonalPalette.fromHueAndChroma(h, CHROMA.secondary),
+    tertiaryPalette: TonalPalette.fromHueAndChroma(
+      (h + TERTIARY_HUE_SHIFT) % 360,
+      CHROMA.tertiary,
+    ),
+    neutralPalette: TonalPalette.fromHueAndChroma(
+      (h + NEUTRAL_HUE_SHIFT) % 360,
+      CHROMA.neutral,
+    ),
+    neutralVariantPalette: TonalPalette.fromHueAndChroma(
+      (h + NEUTRAL_HUE_SHIFT) % 360,
+      CHROMA.neutralVariant,
+    ),
+  });
+}
+
+const srgbToLinear = c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const hexToRgb = hex => [0, 2, 4].map(i => parseInt(hex.slice(1 + i, 3 + i), 16) / 255);
+const luminance = hex => {
+  const [R, G, B] = hexToRgb(hex).map(srgbToLinear);
+  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+};
+const contrast = (a, b) => {
+  const [la, lb] = [luminance(a), luminance(b)];
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+};
 
 const rows = Object.entries(SOURCE).map(([name, source]) => {
-  const [, c, h] = hexToOklch(source);
-  const base = oklchToHex([ACCENT_L, c * CHROMA, h]);
+  const s = scheme(source);
+  const g = role => hexFromArgb(role.getArgb(s));
+  const palette = (p, tone) => hexFromArgb(s[p].tone(tone));
+
   return {
     name,
     source,
-    base,
-    hover: oklchToHex([ACCENT_L + 0.06, c * CHROMA, h]),
-    active: oklchToHex([ACCENT_L - 0.07, c * CHROMA, h]),
-    ambient: oklchToHex([AMBIENT_L, Math.min(c * 0.45, AMBIENT_C_MAX), h]),
-    bg: oklchToHex([BG_L, BG_C, (h + BG_HUE_OFFSET) % 360]),
-    soft: oklchToHex([SOFT_L, SOFT_C, (h + BG_HUE_OFFSET) % 360]),
-    softRaised: oklchToHex([SOFT_RAISED_L, SOFT_RAISED_C, (h + BG_HUE_OFFSET) % 360]),
-    softHover: oklchToHex([SOFT_HOVER_L, SOFT_HOVER_C, (h + BG_HUE_OFFSET) % 360]),
-    onAccent: contrast(base, ON_ACCENT),
-    onBody: contrast(base, BODY),
-    onSurface: contrast(base, SURFACE),
+    // base and bg keep these names because two other files depend on them:
+    // BootThemeTests regexes them out of accents.ts, and index.html carries its
+    // own copy for the pre-paint cover.
+    base: g(M.primary),
+    onBase: g(M.onPrimary),
+    // M3 expresses hover and press as state layers over the fill. Vice paints
+    // solid colours because several of these sit under a CSS transition, so the
+    // ends of the ramp come off the palette directly.
+    hover: palette('primaryPalette', 86),
+    active: palette('primaryPalette', 74),
+    bg: g(M.surface),
+    surfaceLowest: g(M.surfaceContainerLowest),
+    surfaceLow: g(M.surfaceContainerLow),
+    surface: g(M.surfaceContainer),
+    surfaceHigh: g(M.surfaceContainerHigh),
+    surfaceHighest: g(M.surfaceContainerHighest),
+    onSurface: g(M.onSurface),
+    onSurfaceVariant: g(M.onSurfaceVariant),
+    primaryContainer: g(M.primaryContainer),
+    onPrimaryContainer: g(M.onPrimaryContainer),
+    secondaryContainer: g(M.secondaryContainer),
+    onSecondaryContainer: g(M.onSecondaryContainer),
+    tertiaryContainer: g(M.tertiaryContainer),
+    onTertiaryContainer: g(M.onTertiaryContainer),
+    outline: g(M.outline),
+    outlineVariant: g(M.outlineVariant),
+    error: g(M.error),
+    onError: g(M.onError),
+    errorContainer: g(M.errorContainer),
+    onErrorContainer: g(M.onErrorContainer),
+    // The ambient wash behind everything. Never carries text.
+    ambient: palette('primaryPalette', 22),
   };
 });
 
-// Text and accents sit on the tinted background, so both are held to the bar.
-const TEXT = '#ededed';
-const TEXT_SECONDARY = '#a3a3a3';
+// M3 guarantees contrast for correctly paired roles, so this is not the spec's
+// job, it is a guard against Vice pairing them wrongly. It has caught two real
+// regressions and stays.
+const PAIRS = [
+  ['base', 'onBase'],
+  ['primaryContainer', 'onPrimaryContainer'],
+  ['secondaryContainer', 'onSecondaryContainer'],
+  ['tertiaryContainer', 'onTertiaryContainer'],
+  ['errorContainer', 'onErrorContainer'],
+  ['bg', 'onSurface'],
+  ['surfaceLow', 'onSurface'],
+  ['surface', 'onSurface'],
+  ['surfaceHigh', 'onSurface'],
+  ['surfaceLowest', 'onSurface'],
+];
+// Body text has to clear AA. onSurfaceVariant is the dimmer partner used for
+// meta lines, held to the same bar because it is still body text.
+const DIM_PAIRS = [
+  ['bg', 'onSurfaceVariant'],
+  ['surfaceLow', 'onSurfaceVariant'],
+  ['surface', 'onSurfaceVariant'],
+];
 
+const failures = [];
 for (const r of rows) {
-  r.textOnBg = contrast(TEXT, r.bg);
-  r.accentOnBg = contrast(r.base, r.bg);
-  r.textOnSoft = contrast(TEXT, r.soft);
-  r.textOnSoftRaised = contrast(TEXT, r.softRaised);
-  r.textOnSoftHover = contrast(TEXT, r.softHover);
-  r.accentOnSoft = contrast(r.base, r.soft);
-  // Badges and marks fill with the raised tone and write on it in the accent,
-  // which is the one place accent-coloured text lands on a soft surface.
-  r.accentOnRaised = contrast(r.base, r.softRaised);
-  // Meta lines on a card are secondary text, so it is held to the bar too.
-  r.dimOnSoft = contrast(TEXT_SECONDARY, r.soft);
-  // Cards have to stay visibly above the background they sit on. Tone is the
-  // only thing separating them, since there is no drop shadow to help.
-  r.softOverBg = contrast(r.soft, r.bg);
+  for (const [fill, text] of [...PAIRS, ...DIM_PAIRS]) {
+    const ratio = contrast(r[fill], r[text]);
+    if (ratio < 4.5) failures.push(`${r.name}: ${text} on ${fill} is ${ratio.toFixed(2)}`);
+  }
+  // The accent has to stay legible as text on every surface it labels.
+  for (const fill of ['bg', 'surfaceLow', 'surface']) {
+    const ratio = contrast(r[fill], r.base);
+    if (ratio < 4.5) failures.push(`${r.name}: accent text on ${fill} is ${ratio.toFixed(2)}`);
+  }
+  // Andrew's rule: the background is never pure black, so the ambient wash at
+  // the top has somewhere to land.
+  for (const key of ['bg', 'surfaceLowest']) {
+    if (r[key] === '#000000') failures.push(`${r.name}: ${key} is pure black`);
+  }
 }
 
-const failures = rows.filter(
-  r =>
-    Math.min(
-      r.onAccent,
-      r.onBody,
-      r.onSurface,
-      r.textOnBg,
-      r.accentOnBg,
-      r.textOnSoft,
-      r.textOnSoftRaised,
-      r.textOnSoftHover,
-      r.accentOnSoft,
-      r.accentOnRaised,
-      r.dimOnSoft,
-    ) < 4.5,
-);
 if (failures.length) {
-  console.error('Accents below WCAG AA 4.5:1:', failures.map(f => f.name).join(', '));
-  for (const f of failures) {
-    console.error(
-      `  ${f.name}: text-on-soft ${f.textOnSoft.toFixed(2)} ` +
-      `text-on-raised ${f.textOnSoftRaised.toFixed(2)} ` +
-      `text-on-hover ${f.textOnSoftHover.toFixed(2)} ` +
-      `accent-on-soft ${f.accentOnSoft.toFixed(2)} dim-on-soft ${f.dimOnSoft.toFixed(2)}`,
-    );
-  }
-  process.exit(1);
-}
-
-// The ladder has to keep its order and its spacing on every accent.
-//
-// Comparing text contrast against the old grays was tried and is the wrong
-// test: at these tones every stop clears AA about three times over, so the
-// comparison only measures how a hue happens to land in WCAG's luminance
-// formula, and green failed it by 0.12 in a ratio of 13:1. What matters is
-// that a card stays visibly above the page, a control stays above the card,
-// and hover stays above rest. That is lightness, and OKLCH measures it in a
-// way that holds across all five hues.
-const LADDER_STEP = 0.035;
-const ladderFailures = rows.filter(r => {
-  const [bgL] = hexToOklch(r.bg);
-  const [softL] = hexToOklch(r.soft);
-  const [raisedL] = hexToOklch(r.softRaised);
-  const [hoverL] = hexToOklch(r.softHover);
-  r.ladder = [bgL, softL, raisedL, hoverL];
-  return (
-    softL - bgL < LADDER_STEP ||
-    raisedL - softL < LADDER_STEP ||
-    hoverL - raisedL < LADDER_STEP
-  );
-});
-if (ladderFailures.length) {
-  console.error('Soft ladder too flat to separate:', ladderFailures.map(f => f.name).join(', '));
-  for (const f of ladderFailures) {
-    console.error(`  ${f.name}: ${f.ladder.map(v => v.toFixed(3)).join(' -> ')}`);
-  }
+  console.error('Scheme failed its own checks:');
+  for (const f of failures) console.error(`  ${f}`);
   process.exit(1);
 }
 
 for (const r of rows) {
+  const hue = h => String(Math.round(Hct.fromInt(argbFromHex(h)).hue)).padStart(3);
   console.log(
-    `${r.name.padEnd(7)} ${r.source} -> ${r.base}  ` +
-    `on-accent ${r.onAccent.toFixed(2)}  on-body ${r.onBody.toFixed(2)}  ` +
-    `on-surface ${r.onSurface.toFixed(2)}  bg ${r.bg} ` +
-    `text-on-bg ${r.textOnBg.toFixed(2)}  accent-on-bg ${r.accentOnBg.toFixed(2)}\n` +
-    `        soft ${r.soft} / ${r.softRaised} / ${r.softHover}  ` +
-    `text-on-soft ${r.textOnSoft.toFixed(2)}  dim-on-soft ${r.dimOnSoft.toFixed(2)}  ` +
-    `accent-on-soft ${r.accentOnSoft.toFixed(2)}  accent-on-raised ${r.accentOnRaised.toFixed(2)}  ` +
-    `soft-over-bg ${r.softOverBg.toFixed(2)}`,
+    `${r.name.padEnd(7)} ${r.source} -> ${r.base} (hue ${hue(r.base)})\n` +
+    `        bg ${r.bg}  card ${r.surfaceLow}  ` +
+    `button ${r.secondaryContainer} (hue ${hue(r.secondaryContainer)}) on ${r.onSecondaryContainer}  ` +
+    `chip ${r.tertiaryContainer}`,
   );
 }
+
+const KEYS = [
+  'base', 'onBase', 'hover', 'active', 'bg',
+  'surfaceLowest', 'surfaceLow', 'surface', 'surfaceHigh', 'surfaceHighest',
+  'onSurface', 'onSurfaceVariant',
+  'primaryContainer', 'onPrimaryContainer',
+  'secondaryContainer', 'onSecondaryContainer',
+  'tertiaryContainer', 'onTertiaryContainer',
+  'outline', 'outlineVariant',
+  'error', 'onError', 'errorContainer', 'onErrorContainer',
+  'ambient',
+];
 
 const body = rows
-  .map(r =>
-    `  ${r.name}: {\n` +
-    `    base: '${r.base}',\n` +
-    `    hover: '${r.hover}',\n` +
-    `    active: '${r.active}',\n` +
-    `    ambient: '${r.ambient}',\n` +
-    `    bg: '${r.bg}',\n` +
-    `    soft: '${r.soft}',\n` +
-    `    softRaised: '${r.softRaised}',\n` +
-    `    softHover: '${r.softHover}',\n` +
-    `  },`,
-  )
+  .map(r => `  ${r.name}: {\n${KEYS.map(k => `    ${k}: '${r[k]}',`).join('\n')}\n  },`)
   .join('\n');
 
 writeFileSync(
   new URL('../ui-src/theme/accents.ts', import.meta.url),
   `// Generated by tools/derive-accents.mjs. Do not edit by hand.
 //
-// Each accent keeps the hue Vice shipped and moves to the tonal position the
-// neutral theme uses for dark mode, so it sits correctly on the #1b1b1b body
-// instead of on the old near-black void. Every value clears WCAG AA against
-// the body, the raised surface, and its own on-accent text colour.
+// Each accent is a Material 3 dark scheme seeded from the colour Vice has
+// shipped since 2.0, built with Expressive's palette chromas. The seed
+// contributes its hue and nothing else: tones come from the scheme, so a card
+// and an inactive button are tonal roles rather than picked values.
+//
+// Pair a fill with its own on-colour and nothing else. The generator checks
+// every pair below at WCAG AA and refuses to write this file if one fails.
 
 export type AccentName = ${Object.keys(SOURCE).map(n => `'${n}'`).join(' | ')};
 
 export interface AccentRamp {
-  /** Fills, focus rings, the record indicator. Carries dark on-accent text. */
+  /** M3 primary. Filled buttons, active toggles, the record dot. */
   base: string;
+  /** Text and icons on \`base\`. Never use --color-text-* on a filled button. */
+  onBase: string;
   hover: string;
   active: string;
-  /** Drives the ambient background wash. Never used for text. */
-  ambient: string;
-  /** The page background: a neighbouring hue to the accent, never black. */
+  /** M3 surface. The page. */
   bg: string;
-  /** Resting fill for cards, tiles and panels. The gray these replaced. */
-  soft: string;
-  /** A control at rest sitting on a soft surface: quiet buttons, inputs. */
-  softRaised: string;
-  /** Where a soft surface or a soft control goes under the pointer. */
-  softHover: string;
+  /** Recessed controls: a select at rest, a switch that is off. */
+  surfaceLowest: string;
+  /** Content containers: clip cards, settings cards, panels. */
+  surfaceLow: string;
+  /** The sidebar and other navigation surfaces. */
+  surface: string;
+  surfaceHigh: string;
+  surfaceHighest: string;
+  onSurface: string;
+  /** Dimmer body text: meta lines, secondary labels. */
+  onSurfaceVariant: string;
+  /** The deeper tonal rung, same hue as the accent: playlist chips. */
+  primaryContainer: string;
+  onPrimaryContainer: string;
+  /** The tonal rung: an inactive button, a quiet control. */
+  secondaryContainer: string;
+  onSecondaryContainer: string;
+  /** A contrasting accent. Available, currently unused: at accent+60 it lands
+   * far enough away to read as a different theme leaking in. */
+  tertiaryContainer: string;
+  onTertiaryContainer: string;
+  /** Interactive boundaries. */
+  outline: string;
+  /** Dividers and hairlines. */
+  outlineVariant: string;
+  error: string;
+  onError: string;
+  errorContainer: string;
+  onErrorContainer: string;
+  /** Drives the ambient wash. Never carries text. */
+  ambient: string;
 }
 
 export const ACCENTS: Record<AccentName, AccentRamp> = {
@@ -288,4 +292,25 @@ export const ACCENT_NAMES = Object.keys(ACCENTS) as AccentName[];
 `,
 );
 
-console.log('\nWrote ui-src/theme/accents.ts');
+// The boot cover paints before the bundle parses, so index.html carries its own
+// copy of the background and accent for all five. Writing it from here means it
+// cannot drift; BootThemeTests still fails the build if somebody hand-edits it.
+const indexPath = new URL('../vice/ui/index.html', import.meta.url);
+const map = (key) =>
+  '{' + rows.map(r => `${r.name}:'${r[key]}'`).join(',') + '}';
+
+let index = readFileSync(indexPath, 'utf8');
+for (const [name, key] of [['BG', 'bg'], ['AC', 'base']]) {
+  const pattern = new RegExp(`var ${name} = \\{[^}]*\\};`);
+  // Test before replacing: an unchanged run writes identical bytes, so
+  // comparing the result to the original cannot tell "already correct" from
+  // "pattern missing".
+  if (!pattern.test(index)) {
+    console.error(`Could not find the ${name} map in vice/ui/index.html.`);
+    process.exit(1);
+  }
+  index = index.replace(pattern, `var ${name} = ${map(key)};`);
+}
+writeFileSync(indexPath, index);
+
+console.log(`\nWrote ui-src/theme/accents.ts and the boot map in vice/ui/index.html (strategy: ${STRATEGY})`);

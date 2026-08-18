@@ -452,6 +452,28 @@ class BootThemeTests(unittest.TestCase):
         for name, value in generated_base.items():
             self.assertIn(f"{name}:'{value}'", index, f"index.html has a stale accent for {name}")
 
+    def test_the_boot_cover_can_set_the_wordmark_before_the_bundle(self) -> None:
+        # The cover paints before the bundle parses. A linked font would flash a
+        # fallback on the one screen whose job is hiding load time, so the face
+        # is inlined in the document head as a data URI.
+        index = UI_INDEX.read_text()
+        self.assertIn("@font-face", index, "the wordmark face must be declared in index.html")
+        self.assertIn("data:font/woff2;base64,", index, "the face must be inlined, not linked")
+        self.assertIn("Syne VICE", index)
+        self.assertIn('class="boot-word wordmark"', index)
+
+        css = read_source(".css")
+        self.assertIn("'Syne VICE'", css, "the .wordmark class must use the inlined family")
+
+    def test_the_wordmark_is_used_in_three_places_only(self) -> None:
+        # It is a logo, not a heading style. Body and heading text stay Figtree.
+        users = [
+            p.name
+            for p in UI_SRC.rglob("*.tsx")
+            if "<Wordmark" in p.read_text() and p.name != "Wordmark.tsx"
+        ]
+        self.assertEqual(sorted(users), ["About.tsx", "SideNav.tsx"])
+
     def test_the_cover_shows_that_something_is_happening(self) -> None:
         index = UI_INDEX.read_text()
         self.assertIn("boot-orbit", index)
@@ -465,7 +487,9 @@ class BootThemeTests(unittest.TestCase):
         # render cannot cover the time before the bundle parses.
         index = UI_INDEX.read_text()
         boot = index[index.index('<div id="boot">'):]
-        self.assertIn("Vice", boot)
+        # The wordmark is set in uppercase, so match the name case-insensitively
+        # rather than pinning how it happens to be cased.
+        self.assertIn("vice", boot.lower())
 
 
 class TypographyTests(unittest.TestCase):
