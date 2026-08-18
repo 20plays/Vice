@@ -38,7 +38,7 @@ body,
 
 body {
   margin: 0;
-  background: var(--color-background-body);
+  background: var(--vice-bg, var(--color-background-body));
   color: var(--color-text-primary);
   font-family: var(--font-family-body);
   overflow: hidden;
@@ -54,7 +54,7 @@ body {
   place-content: center;
   justify-items: center;
   gap: var(--spacing-3);
-  background: var(--color-background-body);
+  background: var(--vice-bg, var(--color-background-body));
   color: var(--color-text-primary);
   transition: opacity var(--duration-medium) var(--ease-standard);
 }
@@ -71,7 +71,69 @@ body {
 }
 
 .boot-mark {
-  color: var(--color-accent);
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  color: var(--boot-accent, var(--color-accent));
+}
+
+/* An arc sweeping the mark, so the cover reads as "coming up" rather than as
+   a window that has stopped. Both of these are transforms and opacity only,
+   which the compositor handles without touching layout. */
+.boot-orbit {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  border-top-color: var(--boot-accent, var(--color-accent));
+  border-right-color: var(--boot-accent, var(--color-accent));
+  opacity: 0.9;
+  animation: boot-spin 900ms linear infinite;
+}
+
+@keyframes boot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Indeterminate, because nothing here knows how long the daemon will take. */
+.boot-bar {
+  width: 128px;
+  height: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-overlay-hover);
+  overflow: hidden;
+}
+
+.boot-bar span {
+  display: block;
+  width: 40%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background: var(--boot-accent, var(--color-accent));
+  animation: boot-slide 1.4s var(--ease-standard) infinite;
+}
+
+@keyframes boot-slide {
+  0% {
+    transform: translateX(-105%);
+  }
+  100% {
+    transform: translateX(355%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-orbit,
+  .boot-bar span {
+    animation: none;
+  }
+  .boot-bar span {
+    width: 100%;
+  }
 }
 
 /* The ambient wash. What is left of the old drifting glow orbs: one static,
@@ -83,9 +145,9 @@ body {
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(120% 90% at 50% 0%, var(--vice-ambient) 0%, transparent 60%),
-    var(--color-background-body);
-  opacity: 0.55;
+    radial-gradient(120% 90% at 50% 0%, var(--vice-ambient) 0%, transparent 62%),
+    var(--vice-bg);
+  opacity: 0.72;
 }
 
 .vice-app {
@@ -94,15 +156,15 @@ body {
   height: 100%;
 }
 
-/* Raised surfaces. Flat fills, not gradients: a card separates from the body
-   by carrying a trace of the accent's hue, which reads as a deliberate
-   surface rather than as a sheen. The values are generated per accent by
-   tools/derive-accents.mjs and contrast-checked against body text there. */
+/* Raised surfaces separate from the background by tone and a hairline, the
+   way Material's surface containers do. No drop shadow: an app window is not
+   a stack of floating cards, and the hue that ties the theme together lives
+   in the background underneath rather than in any single element. */
 .vice-app {
-  --raised: var(--vice-surface);
-  --raised-hover: var(--vice-surface-hover);
-  --raised-edge: inset 0 0 0 1px var(--color-border), 0 6px 18px rgba(0, 0, 0, 0.32);
-  --raised-edge-hover: inset 0 0 0 1px var(--color-border), 0 12px 26px rgba(0, 0, 0, 0.4);
+  --raised: var(--color-background-surface);
+  --raised-hover: var(--color-accent-muted);
+  --raised-edge: inset 0 0 0 1px var(--color-border);
+  --raised-edge-hover: inset 0 0 0 1px var(--color-border);
 }
 
 /* ── dragging a clip onto a playlist ────────────────────────────── */

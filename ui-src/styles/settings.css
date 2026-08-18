@@ -28,7 +28,7 @@
   gap: 4px;
   padding: 4px;
   border-radius: var(--radius-full);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -337,7 +337,7 @@ select option {
   border: none;
   border-radius: var(--radius-full);
   background: var(--color-accent);
-  box-shadow: 0 0 0 3px var(--vice-surface);
+  box-shadow: 0 0 0 3px var(--color-background-surface);
   cursor: grab;
   transition: transform var(--duration-fast) var(--vice-ease-spring);
 }
@@ -642,7 +642,7 @@ select option {
 
 .swatch[data-active] {
   box-shadow:
-    0 0 0 2px var(--vice-surface),
+    0 0 0 2px var(--color-background-surface),
     0 0 0 4px var(--color-text-primary);
 }
 

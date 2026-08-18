@@ -221,6 +221,13 @@ class UICopyTests(unittest.TestCase):
         self.assertIn("local only", share)
         self.assertIn("cloudflared", share)
 
+    def test_a_clip_with_no_detected_game_says_so(self) -> None:
+        # The tag line used to render nothing, so the card quietly changed
+        # height depending on whether detection had found anything.
+        card = (UI_SRC / "components" / "ClipCard.tsx").read_text()
+        self.assertIn("'Untagged'", card)
+        self.assertIn("data-untagged", card)
+
     def test_unreadable_clips_are_marked_and_left_alone(self) -> None:
         card = (UI_SRC / "components" / "ClipCard.tsx").read_text()
         self.assertIn("Unreadable", card)
@@ -395,8 +402,9 @@ class OfflineTests(unittest.TestCase):
 class DesignTokenTests(unittest.TestCase):
     """Every token referenced must exist, or the declaration silently dies."""
 
-    # Set inline by a component, with a fallback, rather than by the theme.
-    LOCAL = {"chip", "filled"}
+    # Set outside the theme provider, with a fallback: by a component's inline
+    # style, or by the pre-paint bootstrap in index.html.
+    LOCAL = {"chip", "filled", "boot-accent"}
 
     def test_no_css_variable_is_referenced_that_does_not_exist(self) -> None:
         bundle = BUNDLE_CSS.read_text()
@@ -422,6 +430,42 @@ class DesignTokenTests(unittest.TestCase):
             for path in UI_SRC.rglob("*.css"):
                 for hit in re.findall(rf"var\(--{name}[^)]*\)", path.read_text()):
                     self.assertIn(",", hit, f"{hit} in {path.name} needs a fallback")
+
+
+class BootThemeTests(unittest.TestCase):
+    """The boot cover paints before the bundle, so it carries its own copy."""
+
+    def test_inline_colours_match_the_generated_accents(self) -> None:
+        index = UI_INDEX.read_text()
+        accents = (UI_SRC / "theme" / "accents.ts").read_text()
+
+        generated_bg = dict(re.findall(r"(\w+): \{[^}]*?bg: '(#\w{6})'", accents, re.S))
+        generated_base = dict(re.findall(r"(\w+): \{\s*base: '(#\w{6})'", accents))
+        self.assertEqual(len(generated_bg), 5, "expected five accents")
+
+        for name, value in generated_bg.items():
+            self.assertIn(
+                f"{name}:'{value}'",
+                index,
+                f"index.html has a stale background for {name}; rerun npm run accents",
+            )
+        for name, value in generated_base.items():
+            self.assertIn(f"{name}:'{value}'", index, f"index.html has a stale accent for {name}")
+
+    def test_the_cover_shows_that_something_is_happening(self) -> None:
+        index = UI_INDEX.read_text()
+        self.assertIn("boot-orbit", index)
+        self.assertIn("boot-bar", index)
+        css = read_source(".css")
+        self.assertIn("@keyframes boot-spin", css)
+        self.assertIn("@keyframes boot-slide", css)
+
+    def test_the_cover_is_reachable_without_javascript_running(self) -> None:
+        # It is markup in index.html on purpose: a cover the bundle has to
+        # render cannot cover the time before the bundle parses.
+        index = UI_INDEX.read_text()
+        boot = index[index.index('<div id="boot">'):]
+        self.assertIn("Vice", boot)
 
 
 class TypographyTests(unittest.TestCase):

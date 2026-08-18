@@ -6,6 +6,22 @@
 <meta name="color-scheme" content="dark">
 <title>Vice</title>
 <link rel="stylesheet" href="/styles/app.css?v=__VICE_VERSION__">
+<script>
+// The accent is a per-install choice held in localStorage, and the boot cover
+// paints long before the bundle can read it. Without this the window opens
+// near-black and snaps to the themed background the moment React mounts.
+// Kept in step with ui-src/theme/accents.ts by a test.
+(function () {
+  var BG = {blue:'#15171f',purple:'#1a151c',green:'#0f1a18',red:'#1d1511',orange:'#1c160f'};
+  var AC = {blue:'#45a7fe',purple:'#a68aff',green:'#46ba8a',red:'#fc6d66',orange:'#ef7e3e'};
+  var name = null;
+  try { name = localStorage.getItem('vice-theme'); } catch (e) { name = null; }
+  if (!BG[name]) name = 'blue';
+  var root = document.documentElement.style;
+  root.setProperty('--vice-bg', BG[name]);
+  root.setProperty('--boot-accent', AC[name]);
+})();
+</script>
 </head>
 <body>
 
@@ -18,8 +34,10 @@
       <circle cx="12" cy="12" r="9.5"/>
       <circle cx="12" cy="12" r="3" fill="currentColor"/>
     </svg>
+    <span class="boot-orbit"></span>
   </div>
   <div class="boot-word">Vice</div>
+  <div class="boot-bar"><span></span></div>
 </div>
 
 <div id="root"></div>

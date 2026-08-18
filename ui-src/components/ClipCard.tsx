@@ -174,7 +174,9 @@ export function ClipCard({
             disk.
           </p>
         ) : null}
-        {clip.game ? <span className="clip-game">{clip.game}</span> : null}
+        <span className="clip-game" data-untagged={clip.game ? undefined : true}>
+          {clip.game || 'Untagged'}
+        </span>
 
         {hasActions(actions) ? (
           <div className="clip-actions">

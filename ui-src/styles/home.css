@@ -32,7 +32,7 @@ kbd {
   display: inline-block;
   padding: 2px 8px;
   border-radius: var(--radius-inner);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
   color: var(--color-text-primary);
   font-family: var(--font-family-code);
   font-size: 0.85em;
@@ -238,7 +238,7 @@ kbd {
   margin: 0;
   padding: var(--spacing-6);
   border-radius: var(--radius-container);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
   color: var(--color-text-secondary);
   text-align: center;
   font-size: 13.5px;
@@ -387,6 +387,11 @@ kbd {
   margin-top: 2px;
   font-size: 11px;
   color: var(--color-text-accent);
+}
+
+/* Says the same thing the empty space used to, but out loud. */
+.clip-game[data-untagged] {
+  color: var(--color-text-disabled);
 }
 
 /* ── playlist chips ─────────────────────────────────────────────── */
@@ -572,7 +577,7 @@ kbd {
   padding: var(--spacing-3);
   border: none;
   border-radius: var(--radius-element);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
   color: var(--color-text-primary);
   font: inherit;
   text-align: left;
@@ -607,7 +612,7 @@ kbd {
   padding: var(--spacing-3);
   border: none;
   border-radius: var(--radius-element);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
   color: var(--color-text-primary);
   font-family: var(--font-family-code);
   font-size: 12.5px;
@@ -695,7 +700,7 @@ kbd {
   gap: var(--spacing-4);
   padding: var(--spacing-5);
   border-radius: var(--radius-container);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
 }
 
 .about-mark {
@@ -749,7 +754,7 @@ kbd {
   gap: var(--spacing-2);
   padding: var(--spacing-4) var(--spacing-5);
   border-radius: var(--radius-container);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
 }
 
 .about-card h3,
@@ -861,7 +866,7 @@ kbd {
   gap: var(--spacing-3);
   padding: var(--spacing-3);
   border-radius: var(--radius-element);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
 }
 
 .tut-badge {
@@ -916,7 +921,7 @@ kbd {
   display: block;
   padding: var(--spacing-3);
   border-radius: var(--radius-inner);
-  background: var(--vice-surface);
+  background: var(--color-background-surface);
   color: var(--color-text-accent);
   font-size: 12.5px;
   word-break: break-all;

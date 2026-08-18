@@ -90,13 +90,18 @@ const ACCENT_L = 0.71;   // uniform, so all five read equally bright in the swat
 const CHROMA = 0.85;     // neutral's documented dark-ramp chroma reduction
 const AMBIENT_L = 0.30;  // a wash, not a glow
 const AMBIENT_C_MAX = 0.075;
-// Raised surfaces carry a trace of the accent instead of being flat grey, so
-// a card separates from the body by hue as well as by lightness and needs no
-// gradient to do it. Chroma is deliberately tiny: at 0.012 it reads as warmth,
-// not as colour.
-const SURFACE_L = 0.265;
-const SURFACE_HOVER_L = 0.315;
-const SURFACE_C_MAX = 0.012;
+// The page background, not the cards. Cards stay neutral and separate by tone
+// the way Material's surface containers do; the hue lives underneath them so
+// the whole window feels like it belongs to the theme without any single
+// element looking tinted.
+//
+// The hue is offset from the accent rather than matching it. A background in
+// the accent's own hue reads as a washed-out version of the accent; a
+// neighbouring hue reads as a considered pairing. 25 degrees is enough to
+// separate them and small enough to stay harmonious.
+const BG_L = 0.205;        // lifted off pure black so the wash has somewhere to land
+const BG_C = 0.016;        // present at a glance only when you look for it
+const BG_HUE_OFFSET = 25;
 
 const rows = Object.entries(SOURCE).map(([name, source]) => {
   const [, c, h] = hexToOklch(source);
@@ -108,23 +113,22 @@ const rows = Object.entries(SOURCE).map(([name, source]) => {
     hover: oklchToHex([ACCENT_L + 0.06, c * CHROMA, h]),
     active: oklchToHex([ACCENT_L - 0.07, c * CHROMA, h]),
     ambient: oklchToHex([AMBIENT_L, Math.min(c * 0.45, AMBIENT_C_MAX), h]),
-    surface: oklchToHex([SURFACE_L, Math.min(c * 0.12, SURFACE_C_MAX), h]),
-    surfaceHover: oklchToHex([SURFACE_HOVER_L, Math.min(c * 0.16, SURFACE_C_MAX * 1.4), h]),
+    bg: oklchToHex([BG_L, BG_C, (h + BG_HUE_OFFSET) % 360]),
     onAccent: contrast(base, ON_ACCENT),
     onBody: contrast(base, BODY),
     onSurface: contrast(base, SURFACE),
   };
 });
 
-// Body text sits on the tinted surface, so it is held to the same bar.
+// Text and accents sit on the tinted background, so both are held to the bar.
 const TEXT = '#ededed';
 for (const r of rows) {
-  r.textOnSurface = contrast(TEXT, r.surface);
-  r.accentOnSurface = contrast(r.base, r.surface);
+  r.textOnBg = contrast(TEXT, r.bg);
+  r.accentOnBg = contrast(r.base, r.bg);
 }
 
 const failures = rows.filter(
-  r => Math.min(r.onAccent, r.onBody, r.onSurface, r.textOnSurface, r.accentOnSurface) < 4.5,
+  r => Math.min(r.onAccent, r.onBody, r.onSurface, r.textOnBg, r.accentOnBg) < 4.5,
 );
 if (failures.length) {
   console.error('Accents below WCAG AA 4.5:1:', failures.map(f => f.name).join(', '));
@@ -135,8 +139,8 @@ for (const r of rows) {
   console.log(
     `${r.name.padEnd(7)} ${r.source} -> ${r.base}  ` +
     `on-accent ${r.onAccent.toFixed(2)}  on-body ${r.onBody.toFixed(2)}  ` +
-    `on-surface ${r.onSurface.toFixed(2)}  surface ${r.surface} ` +
-    `text-on-surface ${r.textOnSurface.toFixed(2)}  accent-on-surface ${r.accentOnSurface.toFixed(2)}`,
+    `on-surface ${r.onSurface.toFixed(2)}  bg ${r.bg} ` +
+    `text-on-bg ${r.textOnBg.toFixed(2)}  accent-on-bg ${r.accentOnBg.toFixed(2)}`,
   );
 }
 
@@ -147,8 +151,7 @@ const body = rows
     `    hover: '${r.hover}',\n` +
     `    active: '${r.active}',\n` +
     `    ambient: '${r.ambient}',\n` +
-    `    surface: '${r.surface}',\n` +
-    `    surfaceHover: '${r.surfaceHover}',\n` +
+    `    bg: '${r.bg}',\n` +
     `  },`,
   )
   .join('\n');
@@ -171,9 +174,8 @@ export interface AccentRamp {
   active: string;
   /** Drives the ambient background wash. Never used for text. */
   ambient: string;
-  /** Raised surfaces: cards, tiles, panels. Flat, with a trace of the hue. */
-  surface: string;
-  surfaceHover: string;
+  /** The page background: a neighbouring hue to the accent, never black. */
+  bg: string;
 }
 
 export const ACCENTS: Record<AccentName, AccentRamp> = {

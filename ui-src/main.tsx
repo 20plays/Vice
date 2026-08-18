@@ -40,6 +40,14 @@ function App() {
     return () => window.clearTimeout(failsafe);
   }, [ready]);
 
+  // On the root, not on .vice-app: body and the boot cover both sit outside
+  // that element and would otherwise never see the themed background.
+  useEffect(() => {
+    const root = document.documentElement;
+    const vars = accentVars(accent);
+    for (const [key, value] of Object.entries(vars)) root.style.setProperty(key, value);
+  }, [accent]);
+
   return (
     <Theme theme={VICE_THEMES[accent]} mode="dark">
       <div className="vice-ambient" style={accentVars(accent)} aria-hidden="true" />
