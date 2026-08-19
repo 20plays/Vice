@@ -321,6 +321,23 @@ def _status_is_ready(status: dict | None) -> bool:
     return bool(status and status.get("ready") is True)
 
 
+def _serving_url(default_url: str) -> str | None:
+    """The UI's URL if it is answering, whether or not the recorder is up.
+
+    2.7.0 made the daemon outlive a recorder that will not start, so the window
+    could explain the problem and let the user change encoder (#156). This is
+    the other half of that: the launcher used to demand status.ready, which the
+    daemon deliberately leaves false in exactly that case, so it killed a
+    healthy daemon and showed nothing. A broken GPU driver became "Vice does
+    not open" with no way to reach Settings.
+    """
+    status = _daemon_status(timeout=0.5)
+    if status is None:
+        return None
+    url = _server_url_from_status(status, default_url)
+    return url if _wait_for_server(url, timeout=1.0) else None
+
+
 def _wait_for_ready_server(default_url: str, timeout: float = 20.0) -> str | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -447,7 +464,16 @@ def _ensure_server(default_url: str, startup_timeout: float = 20.0) -> str | Non
                 if ready_url:
                     log.info("Daemon already running (IPC + HTTP healthy)")
                     return ready_url
-                log.warning("Daemon HTTP responded but recorder did not become ready; restarting daemon")
+                # The recorder never came up, but the UI is serving. Show it:
+                # the window has a banner for this and Settings is how the user
+                # fixes it. Restarting the daemon here only loses the diagnosis.
+                serving = _serving_url(url)
+                if serving:
+                    log.warning(
+                        "Recorder is not ready, opening the window anyway so the problem is visible",
+                    )
+                    return serving
+                log.warning("Daemon HTTP stopped responding; restarting daemon")
                 _stop_daemon()
                 _wait_for_daemon_exit(timeout=10.0)
                 _clear_stale_socket()
@@ -471,6 +497,13 @@ def _ensure_server(default_url: str, startup_timeout: float = 20.0) -> str | Non
         ready_url = _wait_for_ready_server(url, timeout=2.0)
         if ready_url:
             return ready_url
+
+    # Same again for a freshly started daemon: a UI that answers is worth
+    # opening even with no recorder behind it.
+    serving = _serving_url(default_url)
+    if serving:
+        log.warning("Recorder is not ready, opening the window anyway so the problem is visible")
+        return serving
 
     if status is not None:
         log.error("Daemon IPC is alive but HTTP UI is unavailable at %s", url)

@@ -331,6 +331,68 @@ class DaemonLaunchOwnershipTests(unittest.TestCase):
             self.assertFalse(app._start_daemon_via_systemd())
 
 
+class WindowOpensWithoutARecorderTests(unittest.TestCase):
+    """A dead recorder must not cost you the window.
+
+    2.7.0 made the daemon outlive a recorder that will not start so the UI
+    could explain the problem and Settings stayed reachable (#156). The
+    launcher still demanded status.ready, which the daemon deliberately leaves
+    false in exactly that case, so it killed the healthy daemon and showed
+    nothing at all. A GPU driver that needed a reboot became "Vice does not
+    open", with no way to see why.
+    """
+
+    def test_a_serving_ui_is_opened_even_when_the_recorder_is_down(self) -> None:
+        from vice import app
+
+        down = {"version": app.__version__, "ready": False, "recorder_error": "no opengl"}
+        with mock.patch("vice.app._daemon_status", return_value=down), \
+                mock.patch("vice.app._wait_for_server", return_value=True), \
+                mock.patch("vice.app._wait_for_ready_server", return_value=None), \
+                mock.patch("vice.app._stop_daemon") as stop, \
+                mock.patch("vice.app._start_daemon") as start:
+            url = app._ensure_server("http://127.0.0.1:8765/", startup_timeout=0.1)
+
+        self.assertEqual(url, "http://127.0.0.1:8765/")
+        # The daemon was healthy. Killing it would have thrown away the very
+        # diagnosis the window is being opened to show.
+        stop.assert_not_called()
+        start.assert_not_called()
+
+    def test_a_daemon_that_stopped_serving_is_still_restarted(self) -> None:
+        from vice import app
+
+        down = {"version": app.__version__, "ready": False}
+        # HTTP answered the first probe and not the second: genuinely broken,
+        # so the restart path has to stay.
+        with mock.patch("vice.app._daemon_status", return_value=down), \
+                mock.patch("vice.app._wait_for_server", side_effect=[True, False, False]), \
+                mock.patch("vice.app._wait_for_ready_server", return_value=None), \
+                mock.patch("vice.app._wait_for_daemon_exit"), \
+                mock.patch("vice.app._clear_stale_socket"), \
+                mock.patch("vice.app._stop_daemon") as stop, \
+                mock.patch("vice.app._start_daemon") as start:
+            app._ensure_server("http://127.0.0.1:8765/", startup_timeout=0.1)
+
+        stop.assert_called_once()
+        start.assert_called_once()
+
+    def test_a_ready_daemon_still_takes_the_fast_path(self) -> None:
+        from vice import app
+
+        up = {"version": app.__version__, "ready": True}
+        with mock.patch("vice.app._daemon_status", return_value=up), \
+                mock.patch("vice.app._wait_for_server", return_value=True), \
+                mock.patch("vice.app._wait_for_ready_server",
+                           return_value="http://127.0.0.1:8765/") as ready, \
+                mock.patch("vice.app._stop_daemon") as stop:
+            url = app._ensure_server("http://127.0.0.1:8765/", startup_timeout=0.1)
+
+        self.assertEqual(url, "http://127.0.0.1:8765/")
+        ready.assert_called_once()
+        stop.assert_not_called()
+
+
 class ServiceUnitTests(unittest.TestCase):
     def test_the_unit_gives_up_instead_of_retrying_forever(self) -> None:
         unit = (Path(__file__).resolve().parents[1] / "packaging" / "vice.service").read_text()
