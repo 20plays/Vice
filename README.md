@@ -283,6 +283,20 @@ The log lands at `~/.local/share/vice/vice-debug.log`; attach it to a GitHub iss
 
 ---
 
+## Translating
+
+Vice's interface is one JSON file per language. Adding one means filling in a
+copy of the English file and opening a pull request. A partly finished
+translation is fine: anything missing falls back to English.
+
+```bash
+npm run i18n:new -- pt-BR
+```
+
+See [docs/TRANSLATING.md](docs/TRANSLATING.md).
+
+---
+
 ## Star History
 
 https://www.star-history.com/?repos=eklonofficial%2FVice&type=date&legend=top-left 

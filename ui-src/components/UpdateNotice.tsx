@@ -5,6 +5,7 @@ import {copyToClipboard} from '../lib/clipboard';
 import {openExternal} from '../lib/env';
 import {useStore} from '../state/store';
 import {Modal} from './Modal';
+import {t} from '../lib/i18n';
 
 const DISMISSED_KEY = 'vice_update_dismissed';
 
@@ -71,7 +72,7 @@ export function UpdateNotice({
     if (await copyToClipboard(command)) {
       notify({
         kind: 'info',
-        title: 'Command copied, paste it into a terminal',
+        title: t('update.commandCopied'),
         tone: 'accent',
         holdMs: 4000,
       });
@@ -84,29 +85,29 @@ export function UpdateNotice({
     <>
       <Modal
         open={open}
-        title={`Vice ${update.version} is available`}
+        title={t('update.title', {version: update.version})}
         onClose={close}
         footer={
           <>
             <button type="button" className="btn btn-quiet" onClick={dismiss}>
-              Later
+              {t('update.later')}
             </button>
             <button
               type="button"
               className="btn btn-quiet"
               onClick={() => openExternal(update.url)}>
-              Release notes
+              {t('update.releaseNotes')}
             </button>
             {command ? (
               <button type="button" className="btn" onClick={() => void copyCommand()}>
-                Copy command
+                {t('update.copyCommand')}
               </button>
             ) : null}
           </>
         }>
         <p>
-          You are on {state.status.version || 'an older release'}.
-          {command ? ' Update with:' : ''}
+          {t('update.youAreOn', {version: state.status.version || t('update.olderRelease')})}
+          {command ? t('update.updateWith') : ''}
         </p>
         {command ? <code className="update-cmd mono">{command}</code> : null}
         {update.notes?.length ? (
@@ -118,8 +119,8 @@ export function UpdateNotice({
         ) : null}
       </Modal>
 
-      <Modal open={manualCopy !== null} title="Copy this command" onClose={() => setManualCopy(null)}>
-        <p>The clipboard was not available, so here is the command to copy by hand.</p>
+      <Modal open={manualCopy !== null} title={t('update.copyTitle')} onClose={() => setManualCopy(null)}>
+        <p>{t('update.copyByHand')}</p>
         <textarea className="manual-copy" readOnly value={manualCopy ?? ''} rows={2} />
       </Modal>
     </>

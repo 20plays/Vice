@@ -2,6 +2,7 @@ import {useEffect, useState, type RefObject} from 'react';
 
 import {H264_SUPPORTED, HEVC_SUPPORTED} from './env';
 import type {Clip} from './types';
+import {t} from './i18n';
 
 /**
  * True when a clip is H.265 and this engine cannot decode it, so playback has
@@ -49,8 +50,8 @@ export function timecode(seconds: number): string {
 
 export function videoFailureMessage(): string {
   return H264_SUPPORTED
-    ? 'Vice could not play this clip in the app window. The file itself is most likely fine.'
-    : 'This Qt WebEngine build has no H.264 decoder, so clips cannot play inside Vice. The file itself is fine.';
+    ? t('viewer.playbackFailed')
+    : t('viewer.noH264Decoder');
 }
 
 /**

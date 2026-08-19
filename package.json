@@ -16,7 +16,9 @@
     "build": "vite build",
     "dev": "vite build --watch",
     "typecheck": "tsc --noEmit",
-    "accents": "node --import ./tools/mcu-resolve.mjs tools/derive-accents.mjs"
+    "accents": "node --import ./tools/mcu-resolve.mjs tools/derive-accents.mjs",
+    "i18n:check": "node tools/check-locales.mjs",
+    "i18n:new": "node tools/new-locale.mjs"
   },
   "dependencies": {
     "@astryxdesign/cli": "^0.4.1",

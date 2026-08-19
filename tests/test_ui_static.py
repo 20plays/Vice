@@ -10,6 +10,7 @@ real app; these are the things that are invisible until a user on a particular
 machine hits them, plus the guards that have to hold on every file.
 """
 
+import json
 import re
 import subprocess
 import unittest
@@ -24,6 +25,7 @@ UI_INDEX = UI_DIR / "index.html"
 BUNDLE_JS = UI_DIR / "scripts" / "app.js"
 BUNDLE_CSS = UI_DIR / "styles" / "app.css"
 README = REPO_ROOT / "README.md"
+LOCALES = UI_SRC / "locales"
 
 # Spelled as an escape so this file does not itself trip the sweep guard below.
 EM_DASH = "\u2014"
@@ -48,6 +50,31 @@ def _git_ignored() -> frozenset:
     except (OSError, subprocess.SubprocessError):
         return frozenset()
     return frozenset(REPO_ROOT / line for line in out.splitlines() if line)
+
+
+@lru_cache(maxsize=1)
+def english_copy() -> dict:
+    """en.json, the source of truth for every user-facing string."""
+    return json.loads((LOCALES / "en.json").read_text())
+
+
+def _leaf_strings(node) -> list:
+    if isinstance(node, str):
+        return [node]
+    out = []
+    for value in node.values():
+        out.extend(_leaf_strings(value))
+    return out
+
+
+def _leaf_paths(node, prefix: str = "") -> list:
+    """Every key path in a locale tree. A plural object counts as one leaf."""
+    if isinstance(node, str) or "other" in node:
+        return [prefix]
+    out = []
+    for key, value in node.items():
+        out.extend(_leaf_paths(value, f"{prefix}.{key}" if prefix else key))
+    return out
 
 
 def read_source(*suffixes: str) -> str:
@@ -133,8 +160,14 @@ class PlatformWorkaroundTests(unittest.TestCase):
         # save and destroyed a hand-set monitor, which is the only way to
         # reach one gpu-screen-recorder will not enumerate (#160).
         settings = (UI_SRC / "screens" / "Settings.tsx").read_text()
-        self.assertEqual(settings.count("(saved)"), 3, "all three pickers must keep a saved value")
-        self.assertIn("not being reported right now", settings)
+        self.assertEqual(
+            settings.count("settings.savedOption"),
+            3,
+            "all three pickers must keep a saved value",
+        )
+        copy = english_copy()
+        self.assertIn("(saved)", copy["settings"]["savedOption"])
+        self.assertIn("not being reported right now", copy["settings"]["displayMissing"])
 
     def test_h265_clips_ask_for_an_h264_preview_proxy(self) -> None:
         playback = (UI_SRC / "lib" / "playback.ts").read_text()
@@ -147,7 +180,8 @@ class PlatformWorkaroundTests(unittest.TestCase):
         # silence, leaving a grey rectangle and no explanation (#79).
         playback = (UI_SRC / "lib" / "playback.ts").read_text()
         self.assertIn("videoWidth === 0", playback)
-        self.assertIn("no H.264 decoder", playback)
+        self.assertIn("viewer.noH264Decoder", playback)
+        self.assertIn("no H.264 decoder", english_copy()["viewer"]["noH264Decoder"])
 
     def test_native_window_is_detected_before_pywebview_is_injected(self) -> None:
         # window.pywebview only exists after DOMContentLoaded, which is too
@@ -189,21 +223,31 @@ class EffectsProbeTests(unittest.TestCase):
 
 
 class UICopyTests(unittest.TestCase):
+    """What the interface says, read from the locale file it now lives in.
+
+    These used to read the TSX source. Every user-facing string moved into
+    ui-src/locales/en.json for translation, so that is where the assertions
+    belong: the source only carries keys now.
+    """
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = read_source(".tsx", ".ts")
         cls.readme = README.read_text()
+        cls.copy = english_copy()
+        cls.strings = "\n".join(_leaf_strings(cls.copy))
 
     def test_tutorial_reflects_current_workflows(self) -> None:
-        self.assertIn("Double-tap to start or stop a full recording", self.source)
-        self.assertIn("mark a\n              highlight", self.source)
-        self.assertIn("trim the best moment", self.source)
-        self.assertIn("Vice keeps recording", self.source)
-        self.assertIn("Discord Rich Presence is on", self.source)
+        tutorial = self.copy["tutorial"]
+        self.assertIn("Double-tap to start or stop a full recording", tutorial["sessionHelp"])
+        self.assertIn("highlight", tutorial["sessionHelp"])
+        self.assertIn("trim the best moment", tutorial["reviewHelp"])
+        self.assertIn("Vice keeps recording", tutorial["backgroundHelp"])
+        self.assertIn("Discord Rich Presence is on", tutorial["backgroundHelp"])
 
     def test_discord_copy_does_not_say_off_by_default(self) -> None:
         # DiscordConfig.enabled defaults to True.
-        copy = self.source + "\n" + self.readme
+        copy = self.strings + "\n" + self.source + "\n" + self.readme
         self.assertIn("On by default", copy)
         self.assertNotIn("off by default", copy.lower())
 
@@ -218,20 +262,24 @@ class UICopyTests(unittest.TestCase):
         # A LAN address looks identical to a real share link right up until a
         # friend cannot open it (#105).
         share = (UI_SRC / "lib" / "share.ts").read_text()
-        self.assertIn("local only", share)
-        self.assertIn("cloudflared", share)
+        self.assertIn("card.linkCopiedLocal", share)
+        card = self.copy["card"]
+        self.assertIn("local only", card["linkCopiedLocal"])
+        self.assertIn("cloudflared", card["linkCopiedLocalDetail"])
 
     def test_a_clip_with_no_detected_game_says_so(self) -> None:
         # The tag line used to render nothing, so the card quietly changed
         # height depending on whether detection had found anything.
         card = (UI_SRC / "components" / "ClipCard.tsx").read_text()
-        self.assertIn("'Untagged'", card)
+        self.assertIn("common.untagged", card)
+        self.assertEqual(self.copy["common"]["untagged"], "Untagged")
         self.assertIn("data-untagged", card)
 
     def test_unreadable_clips_are_marked_and_left_alone(self) -> None:
         card = (UI_SRC / "components" / "ClipCard.tsx").read_text()
-        self.assertIn("Unreadable", card)
-        self.assertIn("still on\n            disk", card)
+        self.assertIn("card.unreadable", card)
+        self.assertEqual(self.copy["card"]["unreadable"], "Unreadable")
+        self.assertIn("still on disk", self.copy["card"]["unreadableNote"])
 
 
 class SettingsCoverageTests(unittest.TestCase):
@@ -327,7 +375,11 @@ class SettingsCoverageTests(unittest.TestCase):
         # so a game track vanishes with nothing saying why (#137).
         tracks = (UI_SRC / "components" / "settings" / "AudioTracks.tsx").read_text()
         self.assertIn("tracksLostWithoutDesktopAudio", tracks)
-        self.assertIn("will not be recorded", tracks)
+        self.assertIn("audioTracks.droppedWarning", tracks)
+        self.assertIn(
+            "will not be recorded",
+            english_copy()["audioTracks"]["droppedWarning"]["other"],
+        )
 
 
 class EditorTests(unittest.TestCase):
@@ -604,6 +656,78 @@ class NoEmDashesAnywhereTests(unittest.TestCase):
         self.assertIn("editor.ts", names)
         self.assertIn("share.py", names)
         self.assertIn("README.md", names)
+
+
+class TranslationTests(unittest.TestCase):
+    """Guards on the locale files.
+
+    The failure mode worth catching is not a bad translation, it is English
+    moving on and the other languages drifting behind it in silence.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.english = english_copy()
+        cls.english_keys = set(_leaf_paths(cls.english))
+
+    def _locales(self):
+        for path in sorted(LOCALES.glob("*.json")):
+            if path.stem != "en":
+                yield path.stem, json.loads(path.read_text())
+
+    def test_english_is_the_complete_source(self) -> None:
+        self.assertGreater(len(self.english_keys), 300)
+        self.assertTrue((LOCALES / "index.ts").is_file())
+
+    def test_no_locale_carries_a_key_english_has_dropped(self) -> None:
+        # An extra key means English was renamed and this file was not, so the
+        # string is dead weight and whatever replaced it is untranslated.
+        for name, tree in self._locales():
+            extra = sorted(set(_leaf_paths(tree)) - self.english_keys)
+            self.assertEqual(extra, [], f"{name}.json has keys en.json does not: {extra[:5]}")
+
+    def test_a_missing_key_is_allowed_and_falls_back(self) -> None:
+        # The property that makes a half-finished translation shippable, so it
+        # is worth pinning: nothing in i18n.ts may treat a miss as an error.
+        i18n = (UI_SRC / "lib" / "i18n.ts").read_text()
+        self.assertIn("LOCALES[FALLBACK]", i18n)
+        self.assertIn("return key", i18n)
+
+    def test_plural_keys_carry_the_forms_english_needs(self) -> None:
+        # A plural written as a flat string is right in English and wrong in
+        # every language with more than two forms.
+        def walk(node, prefix=""):
+            if not isinstance(node, dict):
+                return
+            if "other" in node:
+                self.assertIn("one", node, f"{prefix} has no singular form")
+                self.assertTrue(
+                    all(
+                        form in ("zero", "one", "two", "few", "many", "other")
+                        for form in node
+                    ),
+                    f"{prefix} has a form that is not a CLDR plural category: {sorted(node)}",
+                )
+                return
+            for key, value in node.items():
+                walk(value, f"{prefix}.{key}" if prefix else key)
+
+        walk(self.english)
+
+    def test_the_ui_has_a_language_picker(self) -> None:
+        settings = (UI_SRC / "screens" / "Settings.tsx").read_text()
+        self.assertIn("availableLocales", settings)
+        self.assertIn("setLocale", settings)
+        # Before the first render, or a screen paints English and then swaps.
+        self.assertIn("initLocale()", (UI_SRC / "main.tsx").read_text())
+
+    def test_translating_is_documented(self) -> None:
+        doc = REPO_ROOT / "docs" / "TRANSLATING.md"
+        self.assertTrue(doc.is_file(), "docs/TRANSLATING.md is missing")
+        text = doc.read_text()
+        self.assertIn("i18n:new", text)
+        self.assertIn("i18n:check", text)
+        self.assertIn("TRANSLATING.md", README.read_text())
 
 
 if __name__ == "__main__":
