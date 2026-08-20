@@ -4,6 +4,7 @@ import {endClipDrag, startClipDrag} from '../lib/clipDrag';
 import {formatBytes, formatDuration} from '../lib/format';
 import {clipTitle, type Clip} from '../lib/types';
 import {H264_SUPPORTED} from '../lib/env';
+import {playbackUrl} from '../lib/playback';
 import {t} from '../lib/i18n';
 
 /**
@@ -61,7 +62,9 @@ export function ClipCard({
     const video = videoRef.current;
     if (!video || !canPreview) return;
     window.clearTimeout(releaseTimer.current);
-    if (!video.getAttribute('src')) video.src = clip.video_url;
+    // Same source the viewer uses, so an H.265 library previews through the
+    // proxy instead of showing a black card.
+    if (!video.getAttribute('src')) video.src = playbackUrl(clip);
     void video.play().catch(() => setPreviewFailed(true));
   };
 

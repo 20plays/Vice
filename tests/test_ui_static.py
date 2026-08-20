@@ -183,6 +183,35 @@ class PlatformWorkaroundTests(unittest.TestCase):
         self.assertIn("viewer.noH264Decoder", playback)
         self.assertIn("no H.264 decoder", english_copy()["viewer"]["noH264Decoder"])
 
+    def test_every_clip_path_segment_is_url_encoded(self) -> None:
+        """Regression test for #138, lost in the 2.8.0 rebuild: a slug is a
+        filename, so `#`, `?`, `%` and `+` all change what the URL means."""
+        api = (UI_SRC / "lib" / "api.ts").read_text()
+        self.assertIn("encodeURIComponent", api)
+        # Any interpolation straight into a path is the bug.
+        for raw in ("${slug}", "${id}", "${jobId}"):
+            self.assertNotIn(
+                f"/{raw}", api,
+                f"{raw} reaches a URL path without encoding",
+            )
+
+    def test_playback_failures_are_logged_with_their_cause(self) -> None:
+        """Without this the only record of a failed clip is a reporter's
+        screenshot, which cannot tell DECODE from SRC_NOT_SUPPORTED."""
+        playback = (UI_SRC / "lib" / "playback.ts").read_text()
+        self.assertIn("nativeLog", playback)
+        for name in ("DECODE", "SRC_NOT_SUPPORTED", "NO_VIDEO_TRACK"):
+            self.assertIn(name, playback)
+        env = (UI_SRC / "lib" / "env.ts").read_text()
+        self.assertIn("log_debug", env)
+
+    def test_card_previews_use_the_same_source_as_the_viewer(self) -> None:
+        """An H.265 library previewed as a black card because the hover preview
+        skipped the proxy the viewer asks for."""
+        card = (UI_SRC / "components" / "ClipCard.tsx").read_text()
+        self.assertIn("playbackUrl(clip)", card)
+        self.assertNotIn("video.src = clip.video_url", card)
+
     def test_native_window_is_detected_before_pywebview_is_injected(self) -> None:
         # window.pywebview only exists after DOMContentLoaded, which is too
         # late to get the quit row right on the first paint.
