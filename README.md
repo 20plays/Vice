@@ -299,7 +299,13 @@ See [docs/TRANSLATING.md](docs/TRANSLATING.md).
 
 ## Star History
 
-https://www.star-history.com/?repos=eklonofficial%2FVice&type=date&legend=top-left 
+<a href="https://www.star-history.com/?repos=eklonofficial%2Fvice&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=eklonofficial/vice&type=date&theme=dark&legend=top-left&sealed_token=q4Al9ZHwYaJsJq_eF6WMPso4JzjrTOsIlnqq5f5CIXvPatTvO5cvdGaGOmxnYcMXHfJupaXOf48O9K14VydKxRtMsWglltcaS9VejIrQN5MCMELpQ8-PqcTXJPfQxDpJavne5W5eg1KJi5vWZ6hCRl956ykEOG4JOWSIVcMYZg9IVnk94cmhVlLmJLGW" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=eklonofficial/vice&type=date&legend=top-left&sealed_token=q4Al9ZHwYaJsJq_eF6WMPso4JzjrTOsIlnqq5f5CIXvPatTvO5cvdGaGOmxnYcMXHfJupaXOf48O9K14VydKxRtMsWglltcaS9VejIrQN5MCMELpQ8-PqcTXJPfQxDpJavne5W5eg1KJi5vWZ6hCRl956ykEOG4JOWSIVcMYZg9IVnk94cmhVlLmJLGW" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=eklonofficial/vice&type=date&legend=top-left&sealed_token=q4Al9ZHwYaJsJq_eF6WMPso4JzjrTOsIlnqq5f5CIXvPatTvO5cvdGaGOmxnYcMXHfJupaXOf48O9K14VydKxRtMsWglltcaS9VejIrQN5MCMELpQ8-PqcTXJPfQxDpJavne5W5eg1KJi5vWZ6hCRl956ykEOG4JOWSIVcMYZg9IVnk94cmhVlLmJLGW" />
+ </picture>
+</a>
 
 ## Credits
 
