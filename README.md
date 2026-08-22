@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="assets/vice.svg" width="96" alt="Vice icon"/>
+  <img src="assets/vice-wordmark.png" width="420" alt="Vice"/>
 </p>
-
-<h1 align="center">Vice</h1>
 
 <p align="center">
   <b>Instant-replay game clipping for Linux.</b><br/>
