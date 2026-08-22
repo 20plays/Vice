@@ -1346,10 +1346,7 @@ class Recorder(ABC):
         except Exception:
             log.exception("Clip tag callback raised")
             return None
-        if not tag:
-            return None
-        tag = re.sub(r"[^A-Za-z0-9]+", "-", tag).strip("-")
-        return tag[:48] or None
+        return filename_tag(tag)
 
     def _clip_name_template(self) -> str:
         return (getattr(self.cfg.output, "clip_name_template", "") or "").strip()
@@ -1579,11 +1576,36 @@ def _gsr_replay_candidates(current: set[str], baseline: set[str]) -> set[str]:
     }
 
 
-def _next_numbered_path(out_dir: Path, stem: str, ext: str, tag: Optional[str] = None) -> Path:
+def filename_tag(game: Optional[str]) -> Optional[str]:
+    """The game part of a Vice filename, or None when there is nothing to add.
+
+    Kept in one place because playlists.game_key lowercases the same rule to
+    build auto-playlist ids: if the two ever disagree, a clip's tag stops
+    matching its own playlist.
+    """
+    tag = re.sub(r"[^A-Za-z0-9]+", "-", (game or "")).strip("-")
+    return tag[:48] or None
+
+
+# Every extension a given kind of file can be numbered under. Counting has to
+# span all of them or switching container mid-library restarts the numbering
+# and clobbers what is already there.
+VIDEO_EXTS = ("mp4", "mkv")
+IMAGE_EXTS = ("png", "jpg", "jpeg")
+
+
+def _next_numbered_path(
+    out_dir: Path,
+    stem: str,
+    ext: str,
+    tag: Optional[str] = None,
+    known_exts: tuple[str, ...] = VIDEO_EXTS,
+) -> Path:
     """Next available <stem>_N[_Tag].<ext> path. Numbering counts every
     container and tag variant so tagged clips never collide."""
     max_n = 0
-    pattern = re.compile(rf"^{stem}_(\d+)(?:_.+)?\.(?:mp4|mkv)$")
+    alternatives = "|".join(known_exts)
+    pattern = re.compile(rf"^{stem}_(\d+)(?:_.+)?\.(?:{alternatives})$")
     for f in out_dir.glob(f"{stem}_*"):
         m = pattern.match(f.name)
         if m:
@@ -1616,8 +1638,10 @@ def slugify_clip_name(name: str) -> Optional[str]:
     dropped; casing is left alone. Returns None when nothing usable is left.
     """
     name = unicodedata.normalize("NFC", (name or "").strip())
-    if name.lower().endswith((".mp4", ".mkv")):
-        name = name[:-4]
+    for suffix in (".mp4", ".mkv", ".png", ".jpg", ".jpeg"):
+        if name.lower().endswith(suffix):
+            name = name[: -len(suffix)]
+            break
     name = re.sub(r"\s+", "-", name)
     name = _SLUG_KEEP.sub("", name)
     return _sanitize_clip_name(name) or None
@@ -1704,6 +1728,61 @@ def _next_clip_path(
 def _next_session_path(out_dir: Path, ext: str = "mp4") -> Path:
     """Return the next available Vice_Session_N.<ext> path in out_dir."""
     return _next_numbered_path(out_dir, "Vice_Session", ext)
+
+
+def next_image_path(out_dir: Path, tag: Optional[str] = None, ext: str = "png") -> Path:
+    """Return the next available Vice_Shot_N[_Game].<ext> path in out_dir."""
+    return _next_numbered_path(out_dir, "Vice_Shot", ext, tag, known_exts=IMAGE_EXTS)
+
+
+async def capture_screenshot(
+    out_path: Path, rc, override: Optional[str] = None, timeout: float = 20.0
+) -> Path:
+    """Save a still of the captured screen to *out_path* with GSR.
+
+    gpu-screen-recorder takes screenshots natively when handed an image path,
+    so this needs no second capture tool and works on every compositor and GPU
+    Vice already supports. It runs as its own short-lived process alongside the
+    one holding the replay buffer, which is why nothing here touches the
+    recorder's state.
+    """
+    if not _has("gpu-screen-recorder"):
+        raise RuntimeError("gpu-screen-recorder is not installed, so screenshots cannot be taken.")
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "gpu-screen-recorder",
+        "-w", _gsr_capture_target(rc, override),
+        "-o", str(out_path),
+    ]
+    log.debug("Screenshot command: %s", " ".join(cmd))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        raise RuntimeError("gpu-screen-recorder did not return a screenshot in time.")
+    except OSError as exc:
+        raise RuntimeError(f"Could not run gpu-screen-recorder: {exc}") from exc
+
+    text = (stderr or b"").decode(errors="replace")
+    if proc.returncode != 0:
+        raise RuntimeError(
+            _summarize_process_error("gpu-screen-recorder", proc.returncode, text)
+            or "gpu-screen-recorder could not take a screenshot."
+        )
+    # GSR exits 0 having written nothing when the capture target is gone. Left
+    # unchecked that reaches the UI as a screenshot the user cannot find.
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        out_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            _summarize_process_error("gpu-screen-recorder", proc.returncode, text)
+            or "gpu-screen-recorder wrote no image."
+        )
+    return out_path
 
 
 # Without an explicit map, ffmpeg keeps only one audio stream per output, so

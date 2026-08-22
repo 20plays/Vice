@@ -38,7 +38,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from . import __version__
-from .runtime import actual_home_dir, normalize_runtime_environment
+from .runtime import actual_home_dir, normalize_runtime_environment, systemd_unit_loaded
 
 SOCKET_FILE = Path("/tmp/vice/vice.sock")
 PID_FILE    = Path("/tmp/vice/vice.pid")
@@ -151,22 +151,12 @@ def _daemon_status(timeout: float = 1.0) -> dict | None:
 def _systemd_unit_available() -> bool:
     """Whether this user's systemd has the Vice unit loaded.
 
-    Everything here is a probe: any failure means "no systemd", and the caller
-    falls back to the plain launch it has always used.
+    The daemon asks the same question when it notices it has been upgraded
+    underneath itself, so the probe lives in runtime.py and both read it from
+    there. Any failure means "no systemd", and the caller falls back to the
+    plain launch it has always used.
     """
-    if not os.environ.get("XDG_RUNTIME_DIR"):
-        return False
-    if not shutil.which("systemctl"):
-        return False
-    try:
-        out = subprocess.run(
-            ["systemctl", "--user", "show", "vice.service", "-p", "LoadState", "--value"],
-            capture_output=True, text=True, timeout=5, check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        log.debug("systemctl probe failed: %s", exc)
-        return False
-    return out.stdout.strip() == "loaded"
+    return systemd_unit_loaded()
 
 
 def _start_daemon_via_systemd() -> bool:

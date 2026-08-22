@@ -25,10 +25,13 @@ import {
   type ClipPreset,
   type Draft,
 } from '../lib/settingsDraft';
-import {ACCENTS, ACCENT_NAMES, type AccentName} from '../theme/accents';
+import {ACCENTS, ACCENT_NAMES} from '../theme/accents';
 import {useStore} from '../state/store';
 import {Modal} from '../components/Modal';
-import {IconCheck, IconClose} from '../components/Icons';
+import {IconCheck, IconClose, IconPlus} from '../components/Icons';
+import {AccentPicker} from '../components/AccentPicker';
+import {useAccentChoice} from '../lib/accentChoice';
+import {customAccent as deriveCustom} from '../theme/viceTheme';
 import {AudioTracks, type AudioSource} from '../components/settings/AudioTracks';
 import {KeyCapture} from '../components/settings/KeyCapture';
 import {
@@ -62,7 +65,10 @@ interface DisplayInfo {
 }
 
 export function Settings() {
-  const {state, dispatch, saveConfig, notify} = useStore();
+  const {state, saveConfig, notify} = useStore();
+  const {choose, chooseCustom, seed} = useAccentChoice();
+  const [picking, setPicking] = useState(false);
+  const customBase = seed ? deriveCustom(seed).ramp.base : null;
   const {config, accent, status} = state;
 
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -320,15 +326,6 @@ export function Settings() {
     setBaseline(JSON.stringify(patchFromDraft(next)));
   };
 
-  const setAccent = (name: AccentName) => {
-    dispatch({type: 'setAccent', accent: name});
-    localStorage.setItem('vice-theme', name);
-    // Share-page embeds carry the same accent, so the Discord strip on a
-    // shared clip matches the app it came from.
-    void api
-      .saveConfig({sharing: {embed_color: ACCENTS[name].base}})
-      .catch(err => console.debug('Saving the embed colour failed', err));
-  };
 
   const setEffectsMode = (mode: EffectsMode) => {
     setEffects(mode);
@@ -742,6 +739,40 @@ export function Settings() {
             />
           </Row>
 
+          <Row label={t('settings.screenshotKey')} help={t('settings.screenshotKeyHelp')}>
+            <div className="key-pair">
+              <KeyCapture
+                value={draft.screenshotKey}
+                onUnsupported={() =>
+                  notify({kind: 'error', title: t('settings.keyUnsupported'), tone: 'error', holdMs: 4000})
+                }
+                onCapture={screenshotKey => {
+                  update({screenshotKey});
+                  void persistNow(
+                    {hotkeys: {screenshot: screenshotKey}},
+                    () => say(t('settings.screenshotKeyNow', {key: screenshotKey})),
+                    t('settings.errSaveKey'),
+                  );
+                }}
+              />
+              {draft.screenshotKey ? (
+                <button
+                  type="button"
+                  className="btn btn-quiet btn-sm"
+                  onClick={() => {
+                    update({screenshotKey: ''});
+                    void persistNow(
+                      {hotkeys: {screenshot: ''}},
+                      () => say(t('settings.screenshotKeyCleared')),
+                      t('settings.errSaveKey'),
+                    );
+                  }}>
+                  {t('settings.clearKey')}
+                </button>
+              ) : null}
+            </div>
+          </Row>
+
           <Row
             label={t('settings.clipPresets')}
             stack
@@ -777,6 +808,16 @@ export function Settings() {
               value={draft.directory}
               placeholder="~/Videos/Vice"
               onChange={directory => update({directory})}
+            />
+          </Row>
+
+          <Row label={t('settings.imageDirectory')} help={t('settings.imageDirectoryHelp')}>
+            <TextField
+              label={t('settings.imageDirectory')}
+              wide
+              value={draft.imageDirectory}
+              placeholder="~/Pictures/Vice"
+              onChange={imageDirectory => update({imageDirectory})}
             />
           </Row>
 
@@ -919,10 +960,24 @@ export function Settings() {
                   title={t(`accents.${name}`)}
                   aria-label={t('settings.accentAria', {name: t(`accents.${name}`)})}
                   aria-pressed={accent === name}
-                  onClick={() => setAccent(name)}>
+                  onClick={() => choose(name)}>
                   {accent === name ? <IconCheck size={13} /> : null}
                 </button>
               ))}
+              <button
+                type="button"
+                className="swatch swatch-custom"
+                data-active={accent === 'custom' || undefined}
+                // The seed's own derived accent once one is saved, so the
+                // swatch shows the colour it would apply rather than a
+                // permanent rainbow that says nothing about the choice.
+                style={customBase ? {background: customBase} : undefined}
+                title={t('accents.customTitle')}
+                aria-label={t('accents.customTitle')}
+                aria-pressed={accent === 'custom'}
+                onClick={() => setPicking(true)}>
+                {accent === 'custom' ? <IconCheck size={13} /> : <IconPlus size={13} />}
+              </button>
             </div>
           </Row>
 
@@ -1055,6 +1110,16 @@ export function Settings() {
         }>
         <p>{t('settings.restartBody')}</p>
       </Modal>
+
+      <AccentPicker
+        open={picking}
+        initial={seed}
+        onCancel={() => setPicking(false)}
+        onConfirm={next => {
+          chooseCustom(next);
+          setPicking(false);
+        }}
+      />
     </div>
   );
 }

@@ -44,9 +44,11 @@ from .editor import (EditorProjectStore, ExportBusy, ExportManager, Source,
                      sanitize_export_name, text_file_contents,
                      validate_project)
 from .media import probe_media, probe_media_detailed
-from .playlists import PlaylistStore, build_tag_index
-from .recorder import (KEEP_ALL_STREAMS, list_display_options,
-                       list_gsr_audio_sources, slugify_clip_name)
+from .playlists import (IMAGE_PREFIX, PlaylistStore, build_tag_index,
+                        image_slug)
+from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, filename_tag,
+                       list_display_options, list_gsr_audio_sources,
+                       next_image_path, slugify_clip_name)
 from .runtime import actual_home_dir, resolve_path
 
 log = logging.getLogger("vice.share")
@@ -260,6 +262,79 @@ def _purge_slug_proxies(slug: str) -> None:
 
 # WebEngine plays these without help; anything else gets an H.264 preview proxy.
 _WEB_PLAYABLE_VCODECS = {"h264", "avc1", "vp8", "vp9", "av1"}
+
+_IMAGE_MIME = {
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
+
+
+async def copy_image_to_clipboard(path: Path) -> tuple[bool, str]:
+    """Put the picture itself on the clipboard, not a link to it.
+
+    Both tools keep owning the selection in the background after forking, so
+    the clipboard outlives the request that filled it. Returns the reason on
+    failure rather than raising: a screenshot that saved but could not be
+    copied is still a screenshot, and the UI says so instead of losing it.
+    """
+    mime = _IMAGE_MIME.get(path.suffix.lower())
+    if not mime:
+        return False, f"{path.suffix} is not an image format Vice can copy."
+    if shutil.which("wl-copy"):
+        cmd = ["wl-copy", "--type", mime]
+    elif shutil.which("xclip"):
+        cmd = ["xclip", "-selection", "clipboard", "-t", mime]
+    else:
+        return False, "Copying images needs wl-clipboard (Wayland) or xclip (X11)."
+
+    try:
+        data = await asyncio.to_thread(path.read_bytes)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        proc.stdin.write(data)
+        await proc.stdin.drain()
+        proc.stdin.close()
+    except Exception as exc:
+        log.warning("Copying %s to the clipboard failed: %s", path.name, exc)
+        return False, "Could not reach the clipboard."
+    return True, ""
+
+
+async def _starts_on_a_keyframe(path: Path) -> bool:
+    """True when the first video frame of *path* can start a decode.
+
+    A stream copy that begins between keyframes produces a track whose every
+    frame refers back to a picture the file does not contain. It probes fine
+    and tolerant players show it, so the file looks healthy everywhere except
+    the app window, which stays black with no error (#172).
+    """
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-read_intervals", "%+#1",
+        "-show_entries", "frame=key_frame", "-of", "csv=p=0", str(path),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except (asyncio.TimeoutError, OSError) as exc:
+        log.debug("Keyframe probe of %s failed: %s", path.name, exc)
+        # No opinion means keep what we have rather than re-encoding blindly.
+        return True
+    if proc.returncode != 0:
+        return True
+    first = (out or b"").decode(errors="replace").strip().split(",")[0]
+    # An empty answer is the loudest one: ffprobe could not decode a single
+    # frame, which is the case this exists to catch.
+    return first == "1"
 
 
 async def _make_preview_proxy(path: Path, vcodec: str) -> Optional[Path]:
@@ -519,6 +594,10 @@ class ShareServer:
         self._clips: dict[str, Path] = {}
         # slug → {width, height, duration}
         self._meta:  dict[str, dict] = {}
+        # Screenshots, kept in their own index. Slugs are filename stems like a
+        # clip's, and they can collide with one, so nothing may look an image
+        # up in _clips or the other way round.
+        self._images: dict[str, Path] = {}
 
         self.playlists = PlaylistStore()
         self._views = _load_views()
@@ -567,6 +646,10 @@ class ShareServer:
         # Media
         r.add_get("/v/{slug}",    self._video)
         r.add_get("/t/{slug}",    self._thumb)
+        # Images, local only. There is no share link for a screenshot, so
+        # these have no counterpart on the public app below.
+        r.add_get("/i/{slug}",    self._image_file)
+        r.add_get("/it/{slug}",   self._image_thumb)
 
         # REST
         r.add_get("/api/clips",              self._api_clips)
@@ -577,6 +660,7 @@ class ShareServer:
         r.add_post("/api/clips/{slug}/reveal",            self._api_reveal)
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
+        r.add_post("/api/clips/{slug}/frame",             self._api_save_frame)
         r.add_get("/api/app-state",                       self._api_get_app_state)
         r.add_post("/api/app-state",                      self._api_set_app_state)
         r.add_post("/api/clips/{slug}/view",              self._api_view)
@@ -588,6 +672,13 @@ class ShareServer:
         r.add_post("/api/editor/project",             self._api_editor_save_project)
         r.add_post("/api/editor/export",              self._api_editor_export)
         r.add_post("/api/editor/export/{jid}/cancel", self._api_editor_export_cancel)
+        r.add_get("/api/images",                self._api_images)
+        r.add_delete("/api/images/{slug}",      self._api_image_delete)
+        r.add_post("/api/images/{slug}/rename", self._api_image_rename)
+        r.add_post("/api/images/{slug}/reveal", self._api_image_reveal)
+        r.add_post("/api/images/{slug}/open",   self._api_image_open)
+        r.add_post("/api/images/{slug}/copy",   self._api_image_copy)
+        r.add_post("/api/images/{slug}/annotate", self._api_image_annotate)
         r.add_get("/api/playlists",            self._api_playlists)
         r.add_post("/api/playlists",           self._api_create_playlist)
         r.add_patch("/api/playlists/{pid}",    self._api_patch_playlist)
@@ -622,8 +713,12 @@ class ShareServer:
             media = list(out_dir.glob("*.mp4")) + list(out_dir.glob("*.mkv"))
             for clip in sorted(media, key=lambda p: p.stat().st_mtime):
                 self._clips[clip.stem] = clip
+        self.rescan_images()
+        # Both indexes in one call. backfill drops membership for anything not
+        # in the set it is given, so handing it the clips alone would empty
+        # every playlist of its screenshots on the next start.
         self.playlists.backfill(
-            set(self._clips),
+            set(self._clips) | {image_slug(s) for s in self._images},
             build_tag_index(self.cfg.discord.custom_games),
             seed_auto=self.cfg.output.auto_playlist_by_game,
         )
@@ -797,6 +892,91 @@ class ShareServer:
             # browser may play a cached older video for the clip it shows.
             "video_url":  f"/v/{enc}?v={thumb_rev}",
             "thumb_url":  thumb_url,
+        }
+
+    # ── images ────────────────────────────────────────────────────────────────
+
+    def _image_dir(self) -> Path:
+        return resolve_path(
+            getattr(self.cfg.output, "image_directory", "")
+            or str(actual_home_dir() / "Pictures" / "Vice")
+        )
+
+    def next_image_path(self, tag: Optional[str] = None) -> Path:
+        """Where the next screenshot should be written."""
+        out_dir = self._image_dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return next_image_path(out_dir, tag)
+
+    def add_image(self, path: Path, game: Optional[str] = None) -> str:
+        """Register a new screenshot and return its slug."""
+        slug = path.stem
+        self._images[slug] = path
+        if (game and self.cfg.output.auto_playlist_by_game
+                and self.playlists.record_auto(game, image_slug(slug))):
+            asyncio.create_task(self._broadcast_playlists())
+        asyncio.create_task(self._broadcast_image(slug, path))
+        return slug
+
+    def image_count(self) -> int:
+        return len(self._images)
+
+    def rescan_images(self) -> None:
+        """Rebuild the image index from whatever the image directory holds now.
+
+        Playlist membership is deliberately left alone: pointing Vice at a
+        second folder and back must not throw away which playlists the first
+        folder's screenshots were in.
+        """
+        found: dict[str, Path] = {}
+        img_dir = self._image_dir()
+        if img_dir.exists():
+            stills = [p for ext in IMAGE_EXTS for p in img_dir.glob(f"*.{ext}")]
+            for shot in sorted(stills, key=lambda p: p.stat().st_mtime):
+                found[shot.stem] = shot
+        self._images = found
+
+    async def _broadcast_image(self, slug: str, path: Path) -> None:
+        # Thumbnails are what the grid loads. Without one it would pull the
+        # full screenshot, which for a 4K library is hundreds of megabytes.
+        if not _thumb_path(path).exists():
+            await _make_thumb(path)
+        await self.broadcast({"type": "image_saved", "image": await self._image_json(slug, path)})
+
+    async def _image_json(self, slug: str, path: Path) -> dict:
+        try:
+            st = path.stat()
+            size = st.st_size
+            mtime_ns = st.st_mtime_ns
+            created_at = datetime.fromtimestamp(st.st_mtime).isoformat()
+        except OSError:
+            size, mtime_ns, created_at = 0, 0, ""
+
+        # probe_media, never _ffprobe: _ffprobe reads a duration of zero as a
+        # damaged container and goes off to attempt a moov remux, which means
+        # nothing for a still and would rewrite the user's screenshot.
+        width = height = 0
+        try:
+            probed = await probe_media(path) or {}
+            width = int(probed.get("width") or 0)
+            height = int(probed.get("height") or 0)
+        except Exception as exc:
+            log.debug("Could not read the dimensions of %s: %s", path.name, exc)
+
+        enc = quote(slug, safe="")
+        rev = f"{size}-{mtime_ns}"
+        return {
+            "slug":       slug,
+            "name":       path.name,
+            "size":       size,
+            "created_at": created_at,
+            "game":       self.playlists.game_for(image_slug(slug)),
+            "width":      width,
+            "height":     height,
+            # Annotating rewrites the file under the same slug, so both URLs
+            # carry the file's identity or the window shows the pre-edit copy.
+            "image_url":  f"/i/{enc}?v={rev}",
+            "thumb_url":  f"/it/{enc}?v={rev}" if _thumb_path(path).exists() else None,
         }
 
     # ── route handlers ────────────────────────────────────────────────────────
@@ -1010,28 +1190,56 @@ class ShareServer:
 
         ext = path.suffix.lstrip(".") or "mp4"
         tmp = path.with_suffix(f".trimming.{ext}")
-        cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-ss", str(start), "-i", str(path),
-            "-t",  str(end - start),
-            *KEEP_ALL_STREAMS,
-            "-c",  "copy",
-            *(["-movflags", "+faststart"] if ext == "mp4" else []),
-            "-y",  str(tmp),
-        ]
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+        faststart = ["-movflags", "+faststart"] if ext == "mp4" else []
+
+        def _trim_cmd(reencode: bool) -> list[str]:
+            # Audio is copied either way, so every recorded track survives at
+            # its original quality.
+            codec = (
+                ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "copy"]
+                if reencode
+                else ["-c", "copy"]
             )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-            if proc.returncode != 0:
-                tmp.unlink(missing_ok=True)
-                return web.json_response({"ok": False, "error": stderr.decode()[:300]})
-        except asyncio.TimeoutError:
+            return [
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-ss", str(start), "-i", str(path),
+                "-t",  str(end - start),
+                *KEEP_ALL_STREAMS,
+                *codec,
+                *faststart,
+                "-y",  str(tmp),
+            ]
+
+        async def _run(cmd: list[str], timeout: int) -> tuple[bool, str]:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                return proc.returncode == 0, (stderr or b"").decode()[:300]
+            except asyncio.TimeoutError:
+                return False, "ffmpeg timed out"
+
+        # Copy first: it is instant and lossless, and most cuts land on a
+        # keyframe. When this one does not, the copy cannot produce a decodable
+        # track, and re-encoding is the only way to give the exact frame the
+        # user asked for. Seeking to the previous keyframe instead would play,
+        # but it would silently hand back a clip that starts before the chosen
+        # in-point (#172).
+        ok, err = await _run(_trim_cmd(reencode=False), 120)
+        if ok and not await _starts_on_a_keyframe(tmp):
+            log.info("Trim of %s landed between keyframes, re-encoding", path.name)
+            ok, err = await _run(_trim_cmd(reencode=True), 600)
+        elif not ok:
+            log.warning("Copy trim of %s failed, retrying with a re-encode: %s",
+                        path.name, err)
+            ok, err = await _run(_trim_cmd(reencode=True), 600)
+
+        if not ok or not tmp.exists():
             tmp.unlink(missing_ok=True)
-            return web.json_response({"ok": False, "error": "ffmpeg timed out"})
+            return web.json_response({"ok": False, "error": err or "trim failed"})
 
         tmp.replace(path)
         # Clear cached thumbnail and metadata so they regenerate on next access
@@ -1160,6 +1368,198 @@ class ShareServer:
             return web.json_response({"ok": False, "error": "Could not reach the clipboard."})
         return web.json_response({"ok": True})
 
+    # ── image handlers ────────────────────────────────────────────────────────
+
+    def _image_or_404(self, req: web.Request) -> tuple[str, Path]:
+        slug = req.match_info["slug"]
+        path = self._images.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        return slug, path
+
+    async def _image_file(self, req: web.Request) -> web.Response:
+        _, path = self._image_or_404(req)
+        return web.FileResponse(path, headers={
+            "Content-Type": _IMAGE_MIME.get(path.suffix.lower(), "application/octet-stream"),
+            # An annotation rewrites this path, so the URL's revision is what
+            # makes the new picture appear. Never cache past that.
+            "Cache-Control": "no-cache",
+        })
+
+    async def _image_thumb(self, req: web.Request) -> web.Response:
+        _, path = self._image_or_404(req)
+        t = await _make_thumb(path)
+        if not t.exists():
+            raise web.HTTPNotFound()
+        return web.FileResponse(t, headers={"Content-Type": "image/jpeg"})
+
+    async def _api_images(self, _: web.Request) -> web.Response:
+        items = [
+            (slug, path) for slug, path in sorted(
+                self._images.items(),
+                key=lambda kv: kv[1].stat().st_mtime if kv[1].exists() else 0,
+                reverse=True,
+            )
+            if path.exists()
+        ]
+
+        sem = asyncio.Semaphore(3)
+        async def _ensure(path: Path) -> None:
+            if _thumb_path(path).exists():
+                return
+            async with sem:
+                await _make_thumb(path)
+        await asyncio.gather(*[_ensure(path) for _, path in items], return_exceptions=True)
+
+        result = [await self._image_json(slug, path) for slug, path in items]
+        return web.json_response({"images": result})
+
+    async def _api_image_delete(self, req: web.Request) -> web.Response:
+        slug = req.match_info["slug"]
+        path = self._images.pop(slug, None)
+        if path and path.exists():
+            path.unlink()
+        _purge_slug_thumbs(slug)
+        if self.playlists.on_clip_deleted(image_slug(slug)):
+            await self._broadcast_playlists()
+        await self.broadcast({"type": "image_deleted", "slug": slug})
+        return web.json_response({"ok": True})
+
+    async def _api_image_rename(self, req: web.Request) -> web.Response:
+        slug, path = self._image_or_404(req)
+        try:
+            body = await req.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        stem = slugify_clip_name(str(body.get("name", "")))
+        if not stem:
+            return web.json_response({"ok": False, "error": "that name has nothing usable in it"})
+        if stem == slug:
+            return web.json_response(await self._image_json(slug, path))
+
+        target = path.with_name(f"{stem}{path.suffix}")
+        if target.exists():
+            return web.json_response({"ok": False, "error": "an image by that name already exists"})
+        try:
+            path.rename(target)
+        except OSError as exc:
+            log.warning("Renaming %s failed: %s", path.name, exc)
+            return web.json_response({"ok": False, "error": str(exc)})
+
+        self._images.pop(slug, None)
+        self._images[stem] = target
+        _purge_slug_thumbs(slug)
+        if self.playlists.on_clip_renamed(image_slug(slug), image_slug(stem)):
+            await self._broadcast_playlists()
+        await self.broadcast({"type": "image_deleted", "slug": slug})
+        await self._broadcast_image(stem, target)
+        return web.json_response(await self._image_json(stem, target))
+
+    async def _api_image_reveal(self, req: web.Request) -> web.Response:
+        _, path = self._image_or_404(req)
+        asyncio.create_task(asyncio.create_subprocess_exec(
+            "xdg-open", str(path.parent),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL))
+        return web.json_response({"ok": True})
+
+    async def _api_image_open(self, req: web.Request) -> web.Response:
+        _, path = self._image_or_404(req)
+        asyncio.create_task(asyncio.create_subprocess_exec(
+            "xdg-open", str(path),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL))
+        return web.json_response({"ok": True})
+
+    async def _api_image_copy(self, req: web.Request) -> web.Response:
+        _, path = self._image_or_404(req)
+        ok, error = await copy_image_to_clipboard(path)
+        return web.json_response({"ok": ok} if ok else {"ok": False, "error": error})
+
+    async def _api_image_annotate(self, req: web.Request) -> web.Response:
+        """Replace an image with the annotated version the window composited.
+
+        The body is the PNG itself rather than JSON: it is already megabytes,
+        and base64 in a JSON envelope would make it a third bigger for nothing.
+        """
+        slug, path = self._image_or_404(req)
+        data = await req.read()
+        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return web.json_response({"ok": False, "error": "expected a PNG body"}, status=400)
+
+        # Written beside the original and moved into place, so an interrupted
+        # save cannot leave the user with half a screenshot.
+        tmp = path.with_suffix(f".annotating{path.suffix}")
+        target = path.with_suffix(".png")
+        try:
+            tmp.write_bytes(data)
+            tmp.replace(target)
+        except OSError as exc:
+            tmp.unlink(missing_ok=True)
+            log.warning("Saving the annotated %s failed: %s", path.name, exc)
+            return web.json_response({"ok": False, "error": str(exc)})
+
+        # A jpg screenshot annotated once becomes a png, so the index has to
+        # follow the file rather than keep pointing at a path that is gone.
+        if target != path:
+            path.unlink(missing_ok=True)
+        self._images[slug] = target
+        _purge_slug_thumbs(slug)
+        await self._broadcast_image(slug, target)
+        return web.json_response(await self._image_json(slug, target))
+
+    async def _api_save_frame(self, req: web.Request) -> web.Response:
+        """Save the frame at `time` of a clip as a screenshot (#171)."""
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        try:
+            body = await req.json()
+        except Exception:
+            body = {}
+        try:
+            at = max(0.0, float(body.get("time", 0)))
+        except (TypeError, ValueError):
+            at = 0.0
+
+        # The frame inherits the clip's game, so a still pulled out of a
+        # Deadlock clip files itself under Deadlock like a screenshot would.
+        game = self.playlists.game_for(slug)
+        out = self.next_image_path(filename_tag(game))
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{at:.3f}", "-i", str(path),
+            "-frames:v", "1", "-update", "1",
+            "-y", str(out),
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            out.unlink(missing_ok=True)
+            return web.json_response({"ok": False, "error": "ffmpeg timed out reading that frame"})
+        except OSError as exc:
+            return web.json_response({"ok": False, "error": str(exc)})
+        if proc.returncode != 0 or not out.exists():
+            out.unlink(missing_ok=True)
+            reason = (stderr or b"").decode(errors="replace").strip().splitlines()
+            return web.json_response({
+                "ok": False,
+                "error": reason[-1] if reason else "ffmpeg could not read that frame",
+            })
+
+        self.add_image(out, game=game)
+        copied, copy_error = await copy_image_to_clipboard(out)
+        payload = await self._image_json(out.stem, out)
+        payload["ok"] = True
+        payload["copied"] = copied
+        if not copied:
+            payload["copy_error"] = copy_error
+        return web.json_response(payload)
+
     async def _api_open(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
         path = self._clips.get(slug)
@@ -1219,7 +1619,14 @@ class ShareServer:
         pid = req.match_info["pid"]
         body = await req.json()
         slug = str(body.get("slug", ""))
-        if slug not in self._clips:
+        # Clips and screenshots share one membership list, so this accepts
+        # either namespace and refuses anything that is neither.
+        known = (
+            slug[len(IMAGE_PREFIX):] in self._images
+            if slug.startswith(IMAGE_PREFIX)
+            else slug in self._clips
+        )
+        if not known:
             raise web.HTTPNotFound()
         try:
             playlist = self.playlists.add_clip(pid, slug)
@@ -1526,6 +1933,9 @@ class ShareServer:
         hotkeys_raw = dict(merged.get("hotkeys", {}))
         if hotkeys_raw.get("clip"):
             hotkeys_raw["clip"] = normalize_combo(str(hotkeys_raw["clip"]).strip())
+        # Cleared in the UI means unbound, not bound to the empty string.
+        shot = str(hotkeys_raw.get("screenshot") or "").strip()
+        hotkeys_raw["screenshot"] = normalize_combo(shot) if shot else None
         try:
             hotkeys_raw["clip_presets"] = normalize_clip_presets(
                 hotkeys_raw.get("clip_presets", []),
@@ -1580,6 +1990,10 @@ class ShareServer:
         clamp_recording_limits(new_cfg)
 
         old_cfg = copy.deepcopy(self.cfg)
+        image_dir_changed = (
+            getattr(old_cfg.output, "image_directory", "")
+            != getattr(new_cfg.output, "image_directory", "")
+        )
         # embed_color is read per-request, so changing it (the UI syncs it
         # on theme switches) must not demand a daemon restart.
         old_sharing = copy.deepcopy(old_cfg.sharing)
@@ -1617,6 +2031,11 @@ class ShareServer:
         # This keeps restart-intended config changes from being lost.
         save_cfg(new_cfg)
 
+        # Pointing Vice at a different pictures folder has to show that
+        # folder's contents now, not after a restart.
+        if image_dir_changed and not apply_error:
+            self.rescan_images()
+
         if apply_error:
             return web.json_response({
                 "ok": True,
@@ -1642,6 +2061,7 @@ class ShareServer:
             "running":  True,
             "version":  __version__,
             "clips":    self.clip_count(),
+            "images":   self.image_count(),
             "local_url": self.local_base_url(),
             "public_url": public_url,
             "base_url": public_url,

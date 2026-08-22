@@ -2,7 +2,7 @@ import {useEffect, useLayoutEffect, useRef, useState} from 'react';
 
 import {api} from '../lib/api';
 import {onWsMessage} from '../lib/ws';
-import {ACCENTS} from '../theme/accents';
+import {resolveAccent} from '../theme/viceTheme';
 import {useStore} from '../state/store';
 import {createEditorEngine, type EditorEngine} from '../engine/editor';
 import {ED_FONTS, ED_SWATCHES, edFmt} from '../engine/editorConstants';
@@ -26,7 +26,10 @@ const TABS: Array<[EdTab, () => string]> = [
 
 export function Editor() {
   const {state, notify, dispatch} = useStore();
-  const {clips, accent, editorProjectRevision, config} = state;
+  const {clips, accent, customAccent, editorProjectRevision, config} = state;
+  // The editor paints its own timeline, so it needs the resolved accent
+  // rather than a name it can look up in the generated table.
+  const accentBase = resolveAccent(accent, customAccent).ramp.base;
 
   const stageRef = useRef<HTMLDivElement>(null);
   const stageWrapRef = useRef<HTMLDivElement>(null);
@@ -40,8 +43,8 @@ export function Editor() {
   // current values without being rebuilt when either changes.
   const clipsRef = useRef(clips);
   clipsRef.current = clips;
-  const accentRef = useRef(accent);
-  accentRef.current = accent;
+  const accentRef = useRef(accentBase);
+  accentRef.current = accentBase;
 
   const engineRef = useRef<EditorEngine | null>(null);
   if (!engineRef.current) {
@@ -54,7 +57,7 @@ export function Editor() {
           tone,
           holdMs: tone === 'error' ? 6000 : 3000,
         }),
-      accent: () => ACCENTS[accentRef.current].base,
+      accent: () => accentRef.current,
     });
   }
   const engine = engineRef.current;
@@ -380,7 +383,7 @@ export function Editor() {
         engine={engine}
         duration={snap.duration}
         libraryDir={(config?.output?.directory as string) ?? '~/Videos/Vice'}
-        accent={ACCENTS[accent].base}
+        accent={accentBase}
         recording={state.status.recording || state.status.session_active}
         notify={notify}
         onExported={() => dispatch({type: 'setView', view: 'editor'})}

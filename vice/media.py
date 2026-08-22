@@ -21,7 +21,10 @@ log = logging.getLogger("vice.media")
 # interrupted mid-edit; they are safe to delete at daemon startup.
 TEMP_FILE_GLOBS = ("*.trim.mp4", "*.wm.mp4", "*.fix.mp4", "*.trimming.mp4",
                    "*.trim.mkv", "*.wm.mkv", "*.fix.mkv", "*.trimming.mkv",
-                   "*.export.mp4")
+                   "*.export.mp4",
+                   # Left behind when an image annotation is interrupted
+                   # between writing the new picture and moving it into place.
+                   "*.annotating.png", "*.annotating.jpg", "*.annotating.jpeg")
 
 
 async def probe_media(path: Path) -> Optional[dict]:

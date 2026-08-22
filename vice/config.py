@@ -166,6 +166,9 @@ class HotkeyConfig:
     clip: str = "KEY_F9"
     # Optional: toggle continuous recording on/off.
     toggle: Optional[str] = None
+    # Save a still of the screen. Unset by default, so nothing about hotkey
+    # handling changes for anyone who does not ask for it.
+    screenshot: Optional[str] = None
     # Additional clip hotkeys with their own durations.
     clip_presets: list[HotkeyClipPreset] = field(default_factory=list)
     # Ignore Vice's hotkeys while one of these apps is focused, for games that
@@ -177,6 +180,9 @@ class HotkeyConfig:
 @dataclass
 class OutputConfig:
     directory: str = str(actual_home_dir() / "Videos" / "Vice")
+    # Screenshots live apart from clips, because a picture viewer indexing a
+    # folder of 4 GB videos is nobody's idea of a good time.
+    image_directory: str = str(actual_home_dir() / "Pictures" / "Vice")
     filename_format: str = "vice_%Y%m%d_%H%M%S.mp4"
     # Append the detected game to clip filenames (Vice_Clip_4_Overwatch-2.mp4).
     # Uses the same curated games list as Discord Rich Presence; clips save
@@ -249,6 +255,7 @@ class NotificationsConfig:
     session_start_sound: Optional[str] = None
     session_end_sound: Optional[str] = None
     highlight_sound: Optional[str] = None
+    screenshot_sound: Optional[str] = None
 
 
 @dataclass
@@ -365,6 +372,14 @@ def validate_hotkeys(hotkeys: HotkeyConfig) -> None:
         if key in seen:
             raise ValueError(f"duplicate clip hotkey: {key}")
         seen.add(key)
+
+    # The screenshot key shares the dispatcher with the clip keys, so a
+    # collision would silently give one of them to the other.
+    shot = normalize_combo((hotkeys.screenshot or "").strip())
+    if shot:
+        if shot in seen:
+            raise ValueError(f"duplicate hotkey: {shot}")
+        seen.add(shot)
 
 
 def effective_clip_bindings(cfg: Config) -> list[tuple[str, int]]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import pwd
+import re
 import shutil
 import stat
 import subprocess
@@ -200,3 +201,47 @@ def resolve_path(path_like: str | Path) -> Path:
     text = text.replace("${HOME}", home).replace("$HOME", home)
     text = os.path.expandvars(text)
     return Path(text)
+
+
+def systemd_unit_loaded(unit: str = "vice.service") -> bool:
+    """Whether this user's systemd has the unit loaded.
+
+    Everything here is a probe: any failure means "no systemd", and every
+    caller treats that as "do nothing" rather than as an error.
+    """
+    if not os.environ.get("XDG_RUNTIME_DIR"):
+        return False
+    if not shutil.which("systemctl"):
+        return False
+    try:
+        out = subprocess.run(
+            ["systemctl", "--user", "show", unit, "-p", "LoadState", "--value"],
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        log.debug("systemctl probe failed: %s", exc)
+        return False
+    return out.stdout.strip() == "loaded"
+
+
+def installed_version() -> str | None:
+    """The version sitting on disk right now, which is not necessarily the one
+    this process is running.
+
+    Read out of the file rather than imported: the module is already in
+    memory, and Python cannot reload it. Parsing beats importing here because
+    a half-written file during an upgrade must not execute.
+
+    Returns None when it cannot be read, and every caller treats that as "no
+    opinion" so a failed read can never change behaviour.
+    """
+    try:
+        source = (Path(__file__).resolve().parent / "__init__.py").read_text(encoding="utf-8")
+    except OSError as exc:
+        log.debug("Could not read the installed version: %s", exc)
+        return None
+    match = re.search(r"""^__version__\s*=\s*["']([^"']+)["']""", source, re.MULTILINE)
+    if not match:
+        log.debug("No __version__ found in the installed package")
+        return None
+    return match.group(1)

@@ -770,6 +770,91 @@ class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
+class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
+    """Regression tests for #172. A stream copy that starts between keyframes
+    produces a track with nothing to decode from: it probes fine, tolerant
+    players show it, and the app window stays black with no error."""
+
+    KEYFRAME_EVERY = 300  # frames, so a 5 s source has keyframes only at 0 and 5
+
+    @staticmethod
+    def _keyframe_count(path: Path) -> int:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
+             "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True,
+        ).stdout
+        return len([ln for ln in out.splitlines() if ln.strip()])
+
+    @staticmethod
+    def _duration(path: Path) -> float:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        return float(out) if out else 0.0
+
+    def _long_gop_source(self, root: Path) -> Path:
+        src = root / "Vice_Clip_1.mp4"
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=60:duration=6",
+             "-c:v", "libx264", "-preset", "ultrafast",
+             "-g", str(self.KEYFRAME_EVERY), "-keyint_min", str(self.KEYFRAME_EVERY),
+             "-sc_threshold", "0", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", "-y", str(src)], check=True,
+        )
+        return src
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
+    async def test_a_copy_between_keyframes_is_detected(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = self._long_gop_source(root)
+            cut = root / "cut.mp4"
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error",
+                 "-ss", "2.0", "-i", str(src), "-t", "1.0",
+                 "-c", "copy", "-y", str(cut)], check=True,
+            )
+            self.assertEqual(self._keyframe_count(cut), 0, "fixture is not the broken case")
+            self.assertFalse(await share_mod._starts_on_a_keyframe(cut))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
+    async def test_a_clean_copy_is_left_alone(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            src = self._long_gop_source(Path(tmp))
+            self.assertTrue(await share_mod._starts_on_a_keyframe(src))
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
+    async def test_trim_between_keyframes_still_yields_a_playable_exact_cut(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = self._long_gop_source(root)
+            cfg = Config()
+            cfg.output.directory = str(root)
+            server = ShareServer(cfg)
+            server._clips["Vice_Clip_1"] = src
+
+            req = mock.MagicMock()
+            req.match_info = {"slug": "Vice_Clip_1"}
+            req.json = mock.AsyncMock(return_value={"start": 2.0, "end": 4.0})
+            with mock.patch.object(share_mod, "_purge_slug_thumbs"), \
+                 mock.patch.object(share_mod, "_purge_slug_proxies"), \
+                 mock.patch.object(server, "_broadcast_clip", new=mock.AsyncMock()):
+                resp = await server._api_trim(req)
+
+            self.assertTrue(json.loads(resp.text)["ok"])
+            # Exact length the user asked for, and something to decode from.
+            self.assertAlmostEqual(self._duration(src), 2.0, delta=0.2)
+            self.assertGreaterEqual(self._keyframe_count(src), 1)
+
+
+@unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class AutoPlaylistToggleTests(unittest.IsolatedAsyncioTestCase):
     """A detected game files the clip into a per-game auto playlist, unless the
     user turned that off."""
@@ -1634,3 +1719,254 @@ class ShareServerTunnelTests(unittest.IsolatedAsyncioTestCase):
         msg = server.broadcast.await_args.args[0]
         self.assertEqual(msg["type"], "tunnel_error")
         self.assertIn("exited", msg["error"])
+
+
+@unittest.skipUnless(ShareServer is not None and ClientSession is not None, "aiohttp is not installed")
+class ImageApiTests(unittest.IsolatedAsyncioTestCase):
+    """The Images section end to end: list, rename, annotate, delete (#171).
+
+    Real PNGs from ffmpeg rather than stub bytes, because annotate replaces the
+    file and the index has to follow it, and a stub would hide a path bug.
+    """
+
+    async def asyncSetUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        root = Path(self.tmpdir.name)
+
+        self.clip_dir = root / "clips"
+        self.clip_dir.mkdir()
+        self.image_dir = root / "pictures"
+        self.image_dir.mkdir()
+        self.thumb_dir = root / "thumbs"
+        self.thumb_dir.mkdir()
+
+        self.local_port = _free_port()
+        self.public_port = _free_port()
+        while self.public_port == self.local_port:
+            self.public_port = _free_port()
+
+        thumb = self.thumb_dir / "stub.jpg"
+        thumb.write_bytes(b"jpeg")
+
+        async def _stub_make_thumb(_: Path, duration: float = 0.0) -> Path:
+            return thumb
+
+        self.patchers = [
+            mock.patch("vice.share._local_ip", return_value="127.0.0.1"),
+            mock.patch("vice.share.THUMB_DIR", self.thumb_dir),
+            mock.patch("vice.share.HIGHLIGHTS_DIR", root / "highlights"),
+            mock.patch("vice.playlists.PLAYLISTS_PATH", root / "playlists.json"),
+            mock.patch("vice.share.VIEWS_PATH", root / "views.json"),
+            mock.patch("vice.share._make_thumb", new=_stub_make_thumb),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        cfg = Config(
+            output=OutputConfig(
+                directory=str(self.clip_dir),
+                image_directory=str(self.image_dir),
+            ),
+            sharing=SharingConfig(
+                port=self.local_port,
+                public_port=self.public_port,
+                cloudflare_tunnel=False,
+            ),
+        )
+        self.server = ShareServer(cfg)
+        self.server.playlists.path = root / "playlists.json"
+        self.server.playlists.load()
+        await self.server.start()
+        self.client = ClientSession()
+        self.base = self.server.local_base_url()
+
+    async def asyncTearDown(self) -> None:
+        await self.client.close()
+        await self.server.stop()
+
+    def _png(self, name: str, size: str = "64x48") -> Path:
+        path = self.image_dir / name
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", f"color=c=red:size={size}",
+             "-frames:v", "1", "-y", str(path)], check=True,
+        )
+        return path
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
+    async def test_an_image_is_listed_renamed_and_deleted(self) -> None:
+        shot = self._png("Vice_Shot_1.png")
+        self.server.add_image(shot, game="Deadlock")
+        await asyncio.sleep(0)
+
+        async with self.client.get(f"{self.base}/api/images") as resp:
+            self.assertEqual(resp.status, 200)
+            listed = (await resp.json())["images"]
+        self.assertEqual([i["slug"] for i in listed], ["Vice_Shot_1"])
+        self.assertEqual(listed[0]["width"], 64)
+        self.assertEqual(listed[0]["height"], 48)
+        self.assertEqual(listed[0]["game"], "Deadlock")
+        # No sharing for images, so nothing in the payload offers one.
+        self.assertNotIn("share_url", listed[0])
+
+        async with self.client.get(f"{self.base}/i/Vice_Shot_1") as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers["Content-Type"], "image/png")
+
+        async with self.client.post(
+            f"{self.base}/api/images/Vice_Shot_1/rename", json={"name": "Nice shot"}
+        ) as resp:
+            renamed = await resp.json()
+        self.assertEqual(renamed["slug"], "Nice-shot")
+        self.assertTrue((self.image_dir / "Nice-shot.png").exists())
+        self.assertFalse(shot.exists())
+
+        async with self.client.delete(f"{self.base}/api/images/Nice-shot") as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertFalse((self.image_dir / "Nice-shot.png").exists())
+        self.assertEqual(self.server.image_count(), 0)
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
+    async def test_annotating_replaces_the_file_in_place(self) -> None:
+        shot = self._png("Vice_Shot_1.png")
+        self.server.add_image(shot)
+        await asyncio.sleep(0)
+        before = shot.read_bytes()
+
+        # A different picture of the same size, so a byte comparison proves the
+        # write landed rather than proving the sizes differ.
+        replacement = self.image_dir / "scratch.png"
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "color=c=blue:size=64x48",
+             "-frames:v", "1", "-y", str(replacement)], check=True,
+        )
+        payload = replacement.read_bytes()
+        replacement.unlink()
+
+        async with self.client.post(
+            f"{self.base}/api/images/Vice_Shot_1/annotate",
+            data=payload,
+            headers={"Content-Type": "image/png"},
+        ) as resp:
+            self.assertEqual(resp.status, 200)
+            updated = await resp.json()
+
+        self.assertEqual(updated["slug"], "Vice_Shot_1")
+        self.assertEqual(shot.read_bytes(), payload)
+        self.assertNotEqual(shot.read_bytes(), before)
+        # No .annotating leftover, and no second copy under a new name.
+        self.assertEqual(sorted(p.name for p in self.image_dir.iterdir()), ["Vice_Shot_1.png"])
+
+    async def test_annotate_refuses_a_body_that_is_not_a_png(self) -> None:
+        shot = self.image_dir / "Vice_Shot_1.png"
+        shot.write_bytes(b"\x89PNG\r\n\x1a\nstub")
+        self.server.add_image(shot)
+        await asyncio.sleep(0)
+
+        async with self.client.post(
+            f"{self.base}/api/images/Vice_Shot_1/annotate",
+            data=b"<html>not a png</html>",
+            headers={"Content-Type": "image/png"},
+        ) as resp:
+            self.assertEqual(resp.status, 400)
+        self.assertEqual(shot.read_bytes(), b"\x89PNG\r\n\x1a\nstub")
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
+    async def test_a_frame_grabbed_from_a_clip_becomes_an_image(self) -> None:
+        clip = self.clip_dir / "Vice_Clip_1.mp4"
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=30:duration=3",
+             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+             "-y", str(clip)], check=True,
+        )
+        self.server.add_clip(clip, game="Deadlock")
+        await asyncio.sleep(0)
+
+        with mock.patch("vice.share.copy_image_to_clipboard", return_value=(True, "")):
+            async with self.client.post(
+                f"{self.base}/api/clips/Vice_Clip_1/frame", json={"time": 1.5}
+            ) as resp:
+                self.assertEqual(resp.status, 200)
+                payload = await resp.json()
+
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["copied"])
+        self.assertEqual(payload["width"], 160)
+        self.assertEqual(payload["height"], 120)
+        # The still inherits the clip's game, so it files itself the same way.
+        self.assertEqual(payload["game"], "Deadlock")
+        self.assertTrue((self.image_dir / f"{payload['slug']}.png").exists())
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
+    async def test_a_failed_copy_does_not_fail_the_frame_grab(self) -> None:
+        clip = self.clip_dir / "Vice_Clip_1.mp4"
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", "testsrc2=size=160x120:rate=30:duration=2",
+             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+             "-y", str(clip)], check=True,
+        )
+        self.server.add_clip(clip)
+        await asyncio.sleep(0)
+
+        with mock.patch(
+            "vice.share.copy_image_to_clipboard", return_value=(False, "no clipboard tool"),
+        ):
+            async with self.client.post(
+                f"{self.base}/api/clips/Vice_Clip_1/frame", json={"time": 0.5}
+            ) as resp:
+                payload = await resp.json()
+
+        # The picture is on disk either way. Only the paste would have failed.
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["copied"])
+        self.assertEqual(payload["copy_error"], "no clipboard tool")
+        self.assertTrue((self.image_dir / f"{payload['slug']}.png").exists())
+
+    async def test_the_public_server_has_no_route_to_an_image(self) -> None:
+        shot = self.image_dir / "Vice_Shot_1.png"
+        shot.write_bytes(b"\x89PNG\r\n\x1a\nstub")
+        self.server.add_image(shot)
+        await asyncio.sleep(0)
+
+        public = f"http://127.0.0.1:{self.public_port}"
+        for path in ("/i/Vice_Shot_1", "/it/Vice_Shot_1", "/api/images"):
+            async with self.client.get(f"{public}{path}") as resp:
+                self.assertEqual(resp.status, 404, f"{path} is reachable from outside")
+
+    async def test_images_and_clips_share_one_playlist(self) -> None:
+        clip = self.clip_dir / "Vice_Clip_1.mp4"
+        clip.write_bytes(b"x")
+        shot = self.image_dir / "Vice_Shot_1.png"
+        shot.write_bytes(b"\x89PNG\r\n\x1a\nstub")
+        self.server.add_clip(clip, game="Outer Wilds")
+        self.server.add_image(shot, game="Outer Wilds")
+        await asyncio.sleep(0)
+
+        auto = [p for p in self.server.playlists.list_playlists() if p["kind"] == "auto"]
+        self.assertEqual(len(auto), 1, "one game, one playlist, both kinds in it")
+        self.assertIn("Vice_Clip_1", auto[0]["clip_slugs"])
+        self.assertIn("img:Vice_Shot_1", auto[0]["clip_slugs"])
+
+    async def test_a_restart_does_not_empty_playlists_of_their_images(self) -> None:
+        # backfill drops membership for anything outside the set it is given,
+        # so handing it the clips alone would quietly delete every screenshot
+        # from every playlist on the next start.
+        shot = self.image_dir / "Vice_Shot_1.png"
+        shot.write_bytes(b"\x89PNG\r\n\x1a\nstub")
+        self.server.add_image(shot, game="Outer Wilds")
+        await asyncio.sleep(0)
+
+        self.server.rescan_images()
+        self.server.playlists.backfill(
+            set(self.server._clips) | {f"img:{s}" for s in self.server._images},
+            {},
+            seed_auto=True,
+        )
+        auto = [p for p in self.server.playlists.list_playlists() if p["kind"] == "auto"]
+        self.assertEqual(len(auto), 1)
+        self.assertIn("img:Vice_Shot_1", auto[0]["clip_slugs"])

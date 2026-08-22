@@ -285,15 +285,44 @@ The log lands at `~/.local/share/vice/vice-debug.log`; attach it to a GitHub iss
 
 ## Translating
 
-Vice's interface is one JSON file per language. Adding one means filling in a
-copy of the English file and opening a pull request. A partly finished
-translation is fine: anything missing falls back to English.
+**Vice's interface is one JSON file per language, and adding one is a pull
+request.** `ui-src/locales/en.json` is the English source. Every other language
+is a copy of it with the values replaced. Nothing else in the codebase has to
+be touched.
 
 ```bash
-npm run i18n:new -- pt-BR
+npm install                      # once, for the two scripts below
+npm run i18n:new -- pt-BR        # writes ui-src/locales/pt-BR.json
+npm run i18n:check               # how far along every language is
 ```
 
-See [docs/TRANSLATING.md](docs/TRANSLATING.md).
+Translate the values, leave the keys alone. Placeholders in braces, like
+`{count}` or `{hotkey}`, are filled in at runtime and have to survive into your
+sentence; where they sit in it is up to you.
+
+A partly finished translation is worth opening. Fallback is per key, not per
+file, so anything you have not reached yet shows in English and everything you
+have done shows in your language. There is no point at which it starts working.
+
+Only the interface is translated. Log output, `vice doctor` and the CLI stay in
+English, so a pasted log means the same thing to everyone reading the issue
+tracker.
+
+Anything counted is an object rather than one string, because languages do not
+agree on how many forms that needs. Use the CLDR categories your language
+actually has: English needs `one` and `other`, Polish needs `one`, `few` and
+`many` as well.
+
+```json
+"countClips": { "one": "{count} clip", "other": "{count} clips" }
+```
+
+Credit goes by handle in the release notes, in the entry for the language, and
+in the Credits list below.
+
+[docs/TRANSLATING.md](docs/TRANSLATING.md) has the rest: markup inside a
+sentence, testing your file in the running app, and what to do when English
+changes under you.
 
 ---
 

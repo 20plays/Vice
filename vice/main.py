@@ -40,23 +40,27 @@ from .config import (
     CONFIG_DIR,
     CONFIG_PATH,
     effective_clip_bindings,
+    normalize_combo,
     load as load_config,
     save as save_config,
 )
 from .hotkey import HotkeyListener, can_access_hotkeys, list_available_keys
 from .media import cleanup_temp_files
-from .recorder import create_recorder, reap_orphaned_captures
+from .recorder import (capture_screenshot, create_recorder, filename_tag,
+                       reap_orphaned_captures)
 from .runtime import (
     actual_home_dir,
     normalize_runtime_environment,
     resolve_path,
     has_display,
+    installed_version,
     runtime_env_snapshot,
     running_under_systemd,
+    systemd_unit_loaded,
     user_systemd_env_snapshot,
     wait_for_display,
 )
-from .share import ShareServer
+from .share import ShareServer, copy_image_to_clipboard
 from . import audio
 from . import updates
 
@@ -151,7 +155,9 @@ class ViceDaemon:
         self._pending_recording_apply = False
         self._config_apply_lock = asyncio.Lock()
         self._clip_task: Optional[asyncio.Task] = None
+        self._screenshot_task: Optional[asyncio.Task] = None
         self._watchdog_task: Optional[asyncio.Task] = None
+        self._upgrade_task: Optional[asyncio.Task] = None
         self._update_task: Optional[asyncio.Task] = None
         self._update: Optional[dict] = None
         self._ready = False
@@ -172,6 +178,8 @@ class ViceDaemon:
         # Game detected while the most recent clip was being saved, consumed
         # by _on_clip_saved to file the clip into its auto playlist.
         self._last_clip_game: Optional[str] = None
+        # How many windows the last visible-window scan could see.
+        self._last_scan_candidates: int = 0
         # Monitor the pointer is on, when follow-the-pointer capture is on.
         # None means "use recording.display".
         self._display_override: Optional[str] = None
@@ -290,6 +298,9 @@ class ViceDaemon:
             # Remove half-written temp files (trim/watermark/remux) from a
             # previous run that was interrupted mid-edit.
             cleanup_temp_files(out_dir)
+            img_dir = resolve_path(getattr(self.cfg.output, "image_directory", "") or "")
+            if img_dir and img_dir.exists() and img_dir != out_dir:
+                cleanup_temp_files(img_dir)
 
         # A recorder that will not start is not a reason to take the UI down
         # with it. It used to be: the share server was stopped on the way out,
@@ -365,6 +376,7 @@ class ViceDaemon:
             self._discord_task = asyncio.create_task(self._discord_presence_loop())
 
         self._watchdog_task = asyncio.create_task(self._recorder_watchdog_loop())
+        self._upgrade_task = asyncio.create_task(self._upgrade_watch_loop())
         self._sync_follow_mouse_task()
 
         if self.cfg.updates.check_on_start:
@@ -448,6 +460,84 @@ class ViceDaemon:
                 "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
             })
         )
+
+    async def _upgrade_watch_loop(self) -> None:
+        """Restart the daemon after its own files have been replaced on disk.
+
+        An upgrade swaps the files, and this process keeps the old Python in
+        memory because Python cannot reload it. Until now the only thing that
+        noticed was vice-app at launch, so a user who upgraded without opening
+        the window kept running the old daemon and had to know to type
+        `systemctl --user restart vice.service`.
+
+        Deliberately narrow. It only fires when systemd owns the unit, because
+        systemd is what starts the replacement: exiting on our own where
+        nothing supervises us would leave the user with no daemon at all,
+        which is a far worse outcome than a stale one. Every probe that fails
+        means "do nothing", so on any machine where this cannot work the
+        behaviour is byte-identical to before.
+        """
+        interval = 30.0
+        running = __version__
+        unit_checked = False
+        unit_present = False
+
+        while True:
+            await asyncio.sleep(interval)
+
+            on_disk = installed_version()
+            if not on_disk or on_disk == running:
+                continue
+
+            # Only ask systemd once there is something to ask about, so the
+            # common case never shells out at all.
+            if not unit_checked:
+                unit_present = await asyncio.to_thread(systemd_unit_loaded)
+                unit_checked = True
+            if not unit_present:
+                log.info(
+                    "Vice %s is installed but this daemon is %s. No systemd unit here, "
+                    "so restart it yourself to pick up the new code.",
+                    on_disk, running,
+                )
+                return
+
+            # Never in the middle of the user's recording. A restart here would
+            # drop a session partway through or lose a clip that is still being
+            # written, and the upgrade can wait as long as it needs to.
+            if self._session_active or (self._clip_task and not self._clip_task.done()):
+                log.debug("Upgrade to %s is waiting for the recorder to go idle", on_disk)
+                continue
+
+            log.info("Vice %s is installed, restarting this %s daemon to pick it up",
+                     on_disk, running)
+            if self.share:
+                try:
+                    await self.share.broadcast({"type": "daemon_upgrading", "version": on_disk})
+                except Exception as exc:
+                    log.debug("Could not announce the upgrade to the UI: %s", exc)
+
+            await self._restart_via_systemd()
+            return
+
+    async def _restart_via_systemd(self) -> None:
+        """Hand the restart to systemd and let it SIGTERM us.
+
+        Detached with its own session on purpose: systemctl outlives the
+        process it is restarting, and a child sharing our process group would
+        be torn down with us before it could start the replacement.
+        """
+        try:
+            await asyncio.create_subprocess_exec(
+                "systemctl", "--user", "restart", "vice.service",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            # Nothing is restarting us, so stay up on the old code rather than
+            # leaving the user with no daemon.
+            log.warning("Could not ask systemd to restart Vice: %s", exc)
 
     async def _recorder_watchdog_loop(self) -> None:
         """Restart the recorder when its capture process dies (driver reset,
@@ -679,6 +769,15 @@ class ViceDaemon:
             # Double tap → toggle session recording
             self.hotkeys.on_double(clip_key, _session_toggle)
 
+        screenshot_key = normalize_combo((self.cfg.hotkeys.screenshot or "").strip())
+        if screenshot_key:
+            async def _screenshot() -> None:
+                if await self._hotkeys_suppressed():
+                    return
+                await self._handle_screenshot_hotkey()
+
+            self.hotkeys.on(screenshot_key, _screenshot)
+
     async def _apply_live_config(self) -> None:
         """Apply config changes and restart recorder when recording settings changed."""
         async with self._config_apply_lock:
@@ -871,7 +970,12 @@ class ViceDaemon:
         (#102, #152).
         """
         from .active_window import list_candidate_windows
-        for win in list_candidate_windows():
+        windows = list_candidate_windows()
+        # Recorded for the clip detection log: no candidates at all means the
+        # compositor gave us nothing, which is a different fault from a game
+        # that simply is not on the list (#176).
+        self._last_scan_candidates = len(windows)
+        for win in windows:
             matched = self._match_game(win)
             if matched:
                 return matched, win
@@ -907,6 +1011,7 @@ class ViceDaemon:
         game = None
         win = None
         scanned = False
+        candidates = 0
         try:
             from .active_window import get_active_window
             win = get_active_window()
@@ -917,17 +1022,21 @@ class ViceDaemon:
                 # back to a visible-window scan since #102; without the same
                 # fallback here, clips on those sessions were never tagged and
                 # never landed in an auto playlist (#152).
+                scanned = True
                 hit = self._scan_visible_for_game()
+                candidates = getattr(self, "_last_scan_candidates", 0)
                 if hit:
-                    scanned = True
                     game, win = hit
         except Exception:
             log.debug("Game detection for clip tagging failed", exc_info=True)
         # One line per clip so an unmatched game or a compositor miss is
-        # diagnosable from vice.log. Local only, never leaves the machine.
+        # diagnosable from vice.log. A focused window with no match means the
+        # game is not on the curated list; no window and no candidates means
+        # the compositor told us nothing, which is a different problem (#176).
+        # Local only, never leaves the machine.
         log.info(
-            "Clip game detection: process=%r class=%r matched=%r scanned=%s",
-            (win or {}).get("process"), (win or {}).get("class"), game, scanned,
+            "Clip game detection: process=%r class=%r matched=%r scanned=%s candidates=%d",
+            (win or {}).get("process"), (win or {}).get("class"), game, scanned, candidates,
         )
         self._last_clip_game = game
         if not getattr(self.cfg.output, "tag_clips_with_game", False):
@@ -1016,6 +1125,12 @@ class ViceDaemon:
             self._watchdog_task.cancel()
             try:
                 await self._watchdog_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if self._upgrade_task and not self._upgrade_task.done():
+            self._upgrade_task.cancel()
+            try:
+                await self._upgrade_task
             except (asyncio.CancelledError, Exception):
                 pass
         if self._update_task and not self._update_task.done():
@@ -1118,6 +1233,58 @@ class ViceDaemon:
                         "type": "clip_error",
                         "error": self._clip_error_text(),
                     })
+
+    async def _handle_screenshot_hotkey(self) -> None:
+        """Save a still of the screen and put it on the clipboard (#171).
+
+        Deliberately independent of the recorder: gpu-screen-recorder takes the
+        picture in its own short-lived process, so pressing this never disturbs
+        the replay buffer and works whichever backend is recording.
+        """
+        if self._screenshot_task and not self._screenshot_task.done():
+            log.info("Screenshot already in progress; ignoring new trigger")
+            return
+        self._screenshot_task = asyncio.create_task(self._take_screenshot())
+        self._screenshot_task.add_done_callback(self._screenshot_task_done)
+
+    async def _take_screenshot(self) -> None:
+        if not self.share:
+            log.warning("Screenshot requested before the share server was up")
+            return
+        # Same detection the clip path uses, so a screenshot files itself into
+        # the same auto playlist a clip taken at that moment would.
+        game = await asyncio.to_thread(self._clip_game_tag)
+        tag = filename_tag(game) if self.cfg.output.tag_clips_with_game else None
+        out = self.share.next_image_path(tag)
+        try:
+            await capture_screenshot(out, self.cfg.recording, self._display_override)
+        except RuntimeError as exc:
+            click.echo(f"[Vice] Screenshot failed: {exc}", err=True)
+            audio.play_clip_failed(self.cfg.notifications.sound_volume,
+                                   self.cfg.notifications.clip_failed_sound)
+            await self.share.broadcast({"type": "image_error", "error": str(exc)})
+            return
+
+        click.echo(f"[Vice] Screenshot saved: {out.name}", err=True)
+        audio.play_screenshot(self.cfg.notifications.sound_volume,
+                              self.cfg.notifications.screenshot_sound)
+        self.share.add_image(out, game=self._last_clip_game)
+        copied, copy_error = await copy_image_to_clipboard(out)
+        if not copied:
+            # Saved but not copied is worth saying out loud: the user is about
+            # to paste and would otherwise get whatever was there before.
+            log.warning("Screenshot %s could not be copied: %s", out.name, copy_error)
+            await self.share.broadcast({"type": "image_copy_failed", "error": copy_error})
+
+    def _screenshot_task_done(self, task: asyncio.Task) -> None:
+        if self._screenshot_task is task:
+            self._screenshot_task = None
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            log.exception("Screenshot task failed")
 
     def _clip_error_text(self) -> str:
         """What to show the user when a clip did not save."""

@@ -1160,6 +1160,29 @@ class ClipNamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(untagged.name, "Vice_Clip_3.mp4")
         self.assertEqual(tagged.name, "Vice_Clip_3_Deep-Rock-Galactic.mkv")
 
+    def test_next_image_path_numbers_screenshots_on_their_own(self) -> None:
+        from vice.recorder import next_image_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            # Clips share the folder in nobody's setup, but they do share the
+            # counter's regex, so a clip must not push a screenshot's number on.
+            (out / "Vice_Clip_7.mp4").write_bytes(b"x")
+            (out / "Vice_Shot_1.png").write_bytes(b"x")
+            (out / "Vice_Shot_2_Overwatch-2.jpg").write_bytes(b"x")
+
+            untagged = next_image_path(out)
+            tagged = next_image_path(out, tag="Deep-Rock-Galactic")
+
+        self.assertEqual(untagged.name, "Vice_Shot_3.png")
+        self.assertEqual(tagged.name, "Vice_Shot_3_Deep-Rock-Galactic.png")
+
+    def test_a_screenshot_name_keeps_its_extension_off_the_stem(self) -> None:
+        from vice.recorder import slugify_clip_name
+
+        self.assertEqual(slugify_clip_name("Nice shot.png"), "Nice-shot")
+        self.assertEqual(slugify_clip_name("Nice shot.jpeg"), "Nice-shot")
+
     def test_next_session_path_uses_configured_container(self) -> None:
         from vice.recorder import _next_session_path
 

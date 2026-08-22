@@ -12,6 +12,7 @@ machine hits them, plus the guards that have to hold on every file.
 
 import json
 import re
+import shutil
 import subprocess
 import unittest
 from functools import lru_cache
@@ -359,6 +360,7 @@ class SettingsCoverageTests(unittest.TestCase):
             "tag_clips_with_game",
             "auto_playlist_by_game",
             "clip_name_template",
+            "image_directory",
             "cloudflare_tunnel",
             "check_on_start",
             "sound_volume",
@@ -368,15 +370,23 @@ class SettingsCoverageTests(unittest.TestCase):
         ):
             self.assertIn(key, self.draft, f"{key} is never written back")
 
-    def test_all_five_custom_sounds_are_offered(self) -> None:
+    def test_every_custom_sound_is_offered(self) -> None:
         for key in (
             "clip_sound",
             "clip_failed_sound",
             "session_start_sound",
             "session_end_sound",
             "highlight_sound",
+            "screenshot_sound",
         ):
             self.assertIn(key, self.draft)
+
+    def test_the_screenshot_key_can_be_set_and_cleared(self) -> None:
+        self.assertIn("screenshotKey", self.draft)
+        self.assertIn("screenshot: draft.screenshotKey", self.draft)
+        # Unset is a legitimate value for this one, so there has to be a way
+        # back to it. Every other key capture in Settings is always bound.
+        self.assertIn("settings.clearKey", self.settings)
 
     def test_encoder_dropdown_offers_av1(self) -> None:
         self.assertIn("av1_nvenc", self.settings)
@@ -608,6 +618,11 @@ class WebSocketCoverageTests(unittest.TestCase):
             "export_error",
             "editor_project_changed",
             "update_available",
+            "image_saved",
+            "image_deleted",
+            "image_error",
+            "image_copy_failed",
+            "daemon_upgrading",
         ):
             self.assertIn(message, handled, f"{message} is unhandled")
 
@@ -761,3 +776,101 @@ class TranslationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CustomAccentTests(unittest.TestCase):
+    """A custom accent has to be the same design system as the five presets,
+    not a colour pasted over them."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.derive = (UI_SRC / "theme" / "deriveAccent.ts").read_text()
+        cls.theme = (UI_SRC / "theme" / "viceTheme.ts").read_text()
+        cls.index = UI_INDEX.read_text()
+
+    def test_the_runtime_derivation_uses_the_generators_settings(self) -> None:
+        # Every one of these is a trap the generator's comments call out by
+        # name, and a custom accent built without them is a different scheme.
+        for setting in (
+            "Variant.EXPRESSIVE",
+            "specVersion: '2021'",
+            "contrastLevel: 0",
+            "isDark: true",
+        ):
+            self.assertIn(setting, self.derive, f"{setting} is missing from the runtime scheme")
+
+        # Expressive derives primary from sourceHue + 240, so seeding it
+        # without an explicit primary palette turns a blue pick green.
+        self.assertIn("primaryPalette: TonalPalette.fromHueAndChroma", self.derive)
+        self.assertNotIn("new SchemeExpressive", self.derive)
+
+    def test_the_chromas_match_the_generator(self) -> None:
+        generator = (REPO_ROOT / "tools" / "derive-accents.mjs").read_text()
+        for source in (generator, self.derive):
+            self.assertIn(
+                "primary: 40, secondary: 24, tertiary: 32, neutral: 8, neutralVariant: 12",
+                source,
+            )
+        for shift in ("NEUTRAL_HUE_SHIFT = 15", "TERTIARY_HUE_SHIFT = 60"):
+            self.assertIn(shift, generator)
+            self.assertIn(shift, self.derive)
+
+    def test_the_default_primary_tone_matches_the_generator(self) -> None:
+        generator = (REPO_ROOT / "tools" / "derive-accents.mjs").read_text()
+        self.assertIn("DEFAULT_PRIMARY_TONE = 80", generator)
+        self.assertIn("DEFAULT_PRIMARY_TONE = 80", self.derive)
+
+    def test_the_same_contrast_bar_is_enforced_at_runtime(self) -> None:
+        # The generator refuses to write a scheme below AA. The runtime cannot
+        # refuse silently, so it lifts the accent and reports what is left.
+        self.assertIn("4.5", self.derive)
+        self.assertIn("is pure black", self.derive)
+        self.assertIn("rampFailures", self.derive)
+
+    def test_the_boot_cover_can_paint_a_custom_accent(self) -> None:
+        # The cover paints before the bundle parses and cannot derive anything,
+        # so the two colours it needs are cached when the user confirms.
+        self.assertIn("vice-custom-bg", self.index)
+        self.assertIn("vice-custom-base", self.index)
+        choice = (UI_SRC / "lib" / "accentChoice.ts").read_text()
+        self.assertIn("vice-custom-bg", choice)
+        self.assertIn("vice-custom-base", choice)
+        # And it still falls back when they are missing or corrupt.
+        self.assertIn("if (!bg)", self.index)
+
+    def test_a_custom_accent_without_a_seed_falls_back(self) -> None:
+        # A cleared localStorage leaves 'custom' selected with nothing behind
+        # it, and a window painted in no accent at all is not an option.
+        self.assertIn("accent === 'custom' ? 'blue' : accent", self.theme)
+
+    def test_the_custom_theme_is_cached_by_seed(self) -> None:
+        # <Theme> compares by identity, so rebuilding per render would swap the
+        # theme object every frame and repaint the whole tree.
+        self.assertIn("cachedCustom", self.theme)
+
+
+class AccentParityTests(unittest.TestCase):
+    """The runtime derivation and the build-time generator must agree.
+
+    Both keep producing plausible colours when they drift, so nothing else
+    would catch it. This runs the five shipped seeds through the runtime code
+    and diffs every role against what the generator actually wrote.
+
+    Skipped without node_modules, which is how CI runs: the Python suite is the
+    only thing CI installs, and the check belongs to whoever changes the theme.
+    """
+
+    def test_runtime_derivation_matches_the_generator(self) -> None:
+        if not (REPO_ROOT / "node_modules" / "vite").exists():
+            self.skipTest("node_modules is not installed")
+        if not shutil.which("npx"):
+            self.skipTest("npx is not on PATH")
+        result = subprocess.run(
+            ["node", "tools/verify-custom-accent.mjs"],
+            cwd=REPO_ROOT, capture_output=True, text=True, timeout=180,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            "deriveAccent.ts has drifted from tools/derive-accents.mjs:\n"
+            + result.stdout + result.stderr,
+        )

@@ -952,6 +952,40 @@ kbd {
   color: var(--color-text-secondary);
 }
 
+/* The two key fields on the second page, and the slider on the third. Both
+   sit under prose rather than in a settings row, so they carry their own
+   spacing rather than borrowing the Row rules. */
+.tut-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-3);
+  margin-top: var(--spacing-4);
+}
+
+.tut-key {
+  flex: 1 1 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tut-key > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.tut-buffer {
+  margin: var(--spacing-4) 0 var(--spacing-2);
+}
+
+.tut-note {
+  margin: var(--spacing-3) 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
 .tut-dots {
   flex: 1;
   display: flex;
@@ -995,4 +1029,27 @@ kbd {
   color: var(--color-text-secondary);
   font-size: 12.5px;
   line-height: 1.55;
+}
+
+/* The sixth swatch. A conic wheel rather than a flat colour so it reads as
+   "any colour" while empty; once a custom accent is saved it wears that
+   accent instead, set inline. */
+.swatch-custom {
+  background: conic-gradient(
+    from 0deg,
+    #ff4d4d, #ffd24d, #57e389, #4dd2ff, #8a7dff, #ff6ec7, #ff4d4d
+  );
+}
+
+/* The tutorial's pages. The outer box carries the height, the inner one the
+   content, so the two can animate independently: the box grows or shrinks to
+   the next page while the words slide across it. */
+.tut-pages {
+  position: relative;
+}
+
+.tut-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
 }

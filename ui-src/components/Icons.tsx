@@ -27,6 +27,14 @@ export const IconClips = ({size = 18, className}: IconProps) => (
   </svg>
 );
 
+export const IconImages = ({size = 18, className}: IconProps) => (
+  <svg {...base(size)} className={className} aria-hidden="true">
+    <rect x="3" y="4" width="18" height="16" rx="3" />
+    <circle cx="8.5" cy="9.5" r="1.6" />
+    <path d="m4 17 4.5-4.5 3.5 3.5 3-2.5L20 18" />
+  </svg>
+);
+
 export const IconEditor = ({size = 18, className}: IconProps) => (
   <svg {...base(size)} className={className} aria-hidden="true">
     <circle cx="6" cy="7" r="3" />
