@@ -819,14 +819,21 @@ class TrimKeyframeTests(unittest.IsolatedAsyncioTestCase):
                  "-ss", "2.0", "-i", str(src), "-t", "1.0",
                  "-c", "copy", "-y", str(cut)], check=True,
             )
-            self.assertNotEqual(await share_mod._trim_result_problem(cut), "")
+            # Assert the probe answered before trusting its verdict: an
+            # unanswerable probe is "" too, and a bare assertNotEqual on that
+            # fails with nothing to read.
+            self.assertIsNotNone(await share_mod._first_video_packet(cut),
+                                 "the packet probe has to answer at all")
+            problem = await share_mod._trim_result_problem(cut)
+            self.assertNotEqual(problem, "", f"{cut.name} should have been rejected")
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
     async def test_a_clean_copy_is_left_alone(self) -> None:
         import vice.share as share_mod
         with tempfile.TemporaryDirectory() as tmp:
             src = self._long_gop_source(Path(tmp))
-            self.assertEqual(await share_mod._trim_result_problem(src), "")
+            problem = await share_mod._trim_result_problem(src)
+            self.assertEqual(problem, "", f"an untouched recording is not a problem: {problem}")
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg not installed")
     async def test_a_healthy_copy_on_an_edit_list_is_rejected(self) -> None:
