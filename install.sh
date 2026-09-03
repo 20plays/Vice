@@ -777,7 +777,31 @@ clean_previous_local_install() {
 install_vice_venv() {
     info "Creating a dedicated virtual environment at $VENV_DIR"
     rm -rf "$VENV_DIR"
-    python3 -m venv --system-site-packages "$VENV_DIR"
+
+    # On Arch-family systems, pacman installs Python modules for the distro
+    # interpreter under /usr/bin. A pyenv/asdf/conda Python earlier in PATH
+    # cannot see python-pyqt6/python-pyqt6-webengine even with
+    # --system-site-packages, which previously made the installer silently
+    # replace the distro WebEngine with PyPI's H.264-less wheel.
+    local python_bin
+    python_bin="$(command -v python3)"
+    if [[ "$PKG" == "pacman" && -x /usr/bin/python3 ]]; then
+        python_bin=/usr/bin/python3
+    fi
+    info "Using Python for Vice venv: $python_bin ($("$python_bin" --version 2>&1))"
+
+    if [[ "$PKG" == "pacman" ]]; then
+        if ! "$python_bin" -c 'import PyQt6.QtWebEngineWidgets, qtpy' >/dev/null 2>&1; then
+            error "Arch Qt packages are installed but are not importable by $python_bin."
+            error "Vice will not replace them with PyPI Qt because that build cannot decode H.264."
+            error "Refresh the Arch/CachyOS package set, then rerun the installer:"
+            error "  sudo pacman -Syu python python-pyqt6 python-pyqt6-webengine python-qtpy"
+            exit 1
+        fi
+        info "System PyQt6 + QtWebEngine are importable; preserving distro H.264 support."
+    fi
+
+    "$python_bin" -m venv --system-site-packages "$VENV_DIR"
     "$VENV_DIR/bin/python" -m pip install --upgrade pip
 
     # Two-step install to avoid shadowing system Python packages:
