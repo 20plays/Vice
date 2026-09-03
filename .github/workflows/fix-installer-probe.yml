@@ -1,0 +1,76 @@
+name: fix installer dependency probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/fix-installer-probe.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Make optional dependency probing safe
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("install.sh")
+          text = path.read_text()
+          old = '''def _missing(deps):
+              return [pypi for mod, pypi in deps.items() if importlib.util.find_spec(mod) is None]
+          '''
+          new = '''def _missing(deps):
+              missing = []
+              for mod, pypi in deps.items():
+                  try:
+                      spec = importlib.util.find_spec(mod)
+                  except (ImportError, ModuleNotFoundError, AttributeError):
+                      # find_spec("parent.child") imports the parent package first.
+                      # A completely absent optional parent (for example PyQt6)
+                      # is simply a missing dependency, not an installer failure.
+                      spec = None
+                  if spec is None:
+                      missing.append(pypi)
+              return missing
+          '''
+          if old not in text:
+              raise SystemExit("expected _missing implementation not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Validate installer
+        run: |
+          bash -n install.sh
+          python - <<'PY'
+          import importlib.util
+
+          def missing(deps):
+              result = []
+              for mod, pypi in deps.items():
+                  try:
+                      spec = importlib.util.find_spec(mod)
+                  except (ImportError, ModuleNotFoundError, AttributeError):
+                      spec = None
+                  if spec is None:
+                      result.append(pypi)
+              return result
+
+          result = missing({"DefinitelyMissingViceParent.child": "optional-package"})
+          assert result == ["optional-package"], result
+          PY
+
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add install.sh
+          git commit -m "fix: handle missing PyQt6 in installer probe"
+          git push origin main
