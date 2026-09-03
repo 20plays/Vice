@@ -1,0 +1,173 @@
+name: tray i18n validation
+
+on:
+  push:
+    branches: [review/system-tray-i18n-test]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: review/system-tray-i18n-test
+
+      - name: Apply tray localization patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"expected block not found in {path}: {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace(
+              "ui-src/locales/en.json",
+              '''  "app": {\n    "name": "Vice"\n  },\n  "common": {''',
+              '''  "app": {\n    "name": "Vice"\n  },\n  "tray": {\n    "openVice": "Open Vice",\n    "quitVice": "Quit Vice"\n  },\n  "common": {''',
+          )
+
+          replace(
+              "ui-src/lib/env.ts",
+              '''    keep_running: () => void;\n    quit_app: () => void;\n    open_url?: (url: string) => void;''',
+              '''    keep_running: () => void;\n    quit_app: () => void;\n    set_tray_labels?: (openLabel: string, quitLabel: string) => void;\n    open_url?: (url: string) => void;''',
+          )
+
+          replace(
+              "ui-src/lib/env.ts",
+              '''/** Hide the window but leave the daemon recording. Native only. */\nexport function keepRunning(): void {''',
+              '''/** Keep the native tray actions in the same language as the web UI. */\nexport function setNativeTrayLabels(openLabel: string, quitLabel: string): void {\n  if (!IS_NATIVE) return;\n\n  const apply = (): boolean => {\n    try {\n      const bridge = (window as unknown as {pywebview?: PyWebView}).pywebview;\n      if (!bridge?.api?.set_tray_labels) return false;\n      bridge.api.set_tray_labels(String(openLabel), String(quitLabel));\n      return true;\n    } catch (err) {\n      console.debug('The native tray label bridge threw', err);\n      return true;\n    }\n  };\n\n  if (apply()) return;\n  // pywebview documents that its JS API may arrive after the page itself.\n  window.addEventListener('pywebviewready', () => { apply(); }, {once: true});\n}\n\n/** Hide the window but leave the daemon recording. Native only. */\nexport function keepRunning(): void {''',
+          )
+
+          replace(
+              "ui-src/main.tsx",
+              '''import {initLocale, subscribeLocale} from './lib/i18n';\nimport {accentVars, resolveAccent} from './theme/viceTheme';''',
+              '''import {initLocale, subscribeLocale, t} from './lib/i18n';\nimport {setNativeTrayLabels} from './lib/env';\nimport {accentVars, resolveAccent} from './theme/viceTheme';''',
+          )
+
+          replace(
+              "ui-src/main.tsx",
+              '''function App() {''',
+              '''function syncNativeTrayLabels(): void {\n  setNativeTrayLabels(t('tray.openVice'), t('tray.quitVice'));\n}\n\nfunction App() {''',
+          )
+
+          replace(
+              "ui-src/main.tsx",
+              '''  useEffect(() => subscribeLocale(() => retranslate(n => n + 1)), []);''',
+              '''  useEffect(() => {\n    syncNativeTrayLabels();\n    return subscribeLocale(() => {\n      retranslate(n => n + 1);\n      syncNativeTrayLabels();\n    });\n  }, []);''',
+          )
+
+          replace(
+              "vice/app.py",
+              '''        def keep_running(self) -> None:\n            """Close the window but keep the daemon recording."""\n            if self._tray_controller is not None:\n                self._tray_controller.keep_running()\n                return\n            if self._win:\n                self._win.destroy()\n\n        def open_url(self, url: str) -> None:''',
+              '''        def keep_running(self) -> None:\n            """Close the window but keep the daemon recording."""\n            if self._tray_controller is not None:\n                self._tray_controller.keep_running()\n                return\n            if self._win:\n                self._win.destroy()\n\n        def set_tray_labels(self, open_label: str, quit_label: str) -> None:\n            """Update native tray text with strings resolved by the web UI."""\n            if self._tray_controller is not None:\n                self._tray_controller.set_labels(open_label, quit_label)\n\n        def open_url(self, url: str) -> None:''',
+          )
+
+          replace(
+              "vice/tray.py",
+              '''        self._activated: Any = None\n        self._quitting = False\n        self._closed = False''',
+              '''        self._activated: Any = None\n        self._open_label = "Open Vice"\n        self._quit_label = "Quit Vice"\n        self._quitting = False\n        self._closed = False''',
+          )
+
+          replace(
+              "vice/tray.py",
+              '''            show_requested = QtCore.Signal()\n            hide_requested = QtCore.Signal()\n            close_requested = QtCore.Signal()\n\n            def __init__(self) -> None:\n                super().__init__(native)\n                self.show_requested.connect(self.show_window)\n                self.hide_requested.connect(native.hide)\n                self.close_requested.connect(self.close_window)''',
+              '''            show_requested = QtCore.Signal()\n            hide_requested = QtCore.Signal()\n            close_requested = QtCore.Signal()\n            labels_requested = QtCore.Signal(str, str)\n\n            def __init__(self) -> None:\n                super().__init__(native)\n                self.show_requested.connect(self.show_window)\n                self.hide_requested.connect(native.hide)\n                self.close_requested.connect(self.close_window)\n                self.labels_requested.connect(self.set_labels)''',
+          )
+
+          replace(
+              "vice/tray.py",
+              '''            @QtCore.Slot()\n            def close_window(self) -> None:\n                if controller._tray is not None:\n                    controller._tray.hide()\n                native.close()''',
+              '''            @QtCore.Slot()\n            def close_window(self) -> None:\n                if controller._tray is not None:\n                    controller._tray.hide()\n                native.close()\n\n            @QtCore.Slot(str, str)\n            def set_labels(self, open_label: str, quit_label: str) -> None:\n                if controller._open_action is not None:\n                    controller._open_action.setText(open_label)\n                if controller._quit_action is not None:\n                    controller._quit_action.setText(quit_label)''',
+          )
+
+          replace(
+              "vice/tray.py",
+              '''        menu = QMenu(native)\n        open_action = menu.addAction("Open Vice")\n        open_action.triggered.connect(self.show_window)\n        menu.addSeparator()\n        quit_action = menu.addAction("Quit Vice")''',
+              '''        menu = QMenu(native)\n        open_action = menu.addAction(self._open_label)\n        open_action.triggered.connect(self.show_window)\n        menu.addSeparator()\n        quit_action = menu.addAction(self._quit_label)''',
+          )
+
+          replace(
+              "vice/tray.py",
+              '''    def keep_running(self) -> None:\n        """In-app Minimize: hide to tray, or preserve upstream close behavior."""\n        if self._tray_available:\n            self.hide_window()\n        else:\n            self._win.destroy()\n\n    def quit(self) -> None:''',
+              '''    def keep_running(self) -> None:\n        """In-app Minimize: hide to tray, or preserve upstream close behavior."""\n        if self._tray_available:\n            self.hide_window()\n        else:\n            self._win.destroy()\n\n    def set_labels(self, open_label: str, quit_label: str) -> None:\n        """Store translated action labels and update Qt actions on its thread."""\n        if open_label:\n            self._open_label = str(open_label)\n        if quit_label:\n            self._quit_label = str(quit_label)\n        if self._dispatcher is not None:\n            try:\n                self._dispatcher.labels_requested.emit(self._open_label, self._quit_label)\n            except Exception:\n                self._log.debug("Could not update tray action labels", exc_info=True)\n\n    def quit(self) -> None:''',
+          )
+
+          replace(
+              "tests/test_tray.py",
+              '''    def test_backend_change_clears_previous_tray_state(self) -> None:''',
+              '''    def test_translated_labels_are_dispatched_without_recreating_tray(self) -> None:\n        with tempfile.TemporaryDirectory() as tmp:\n            win = _Window()\n            controller = _controller(win, Path(tmp) / "vice-app.sock")\n            controller._dispatcher = mock.Mock()\n            controller.set_labels("Ouvrir Vice", "Quitter Vice")\n            self.assertEqual(controller._open_label, "Ouvrir Vice")\n            self.assertEqual(controller._quit_label, "Quitter Vice")\n            controller._dispatcher.labels_requested.emit.assert_called_once_with(\n                "Ouvrir Vice", "Quitter Vice"\n            )\n\n    def test_backend_change_clears_previous_tray_state(self) -> None:''',
+          )
+
+          replace(
+              "tests/test_ui_static.py",
+              '''    def test_clipboard_falls_back_when_the_async_api_is_unavailable(self) -> None:\n        clipboard = (UI_SRC / "lib" / "clipboard.ts").read_text()\n        self.assertIn("pywebview", clipboard)\n        self.assertIn("execCommand", clipboard)''',
+              '''    def test_native_tray_labels_come_from_the_locale_system(self) -> None:\n        env = (UI_SRC / "lib" / "env.ts").read_text()\n        main = (UI_SRC / "main.tsx").read_text()\n        self.assertIn("set_tray_labels", env)\n        self.assertIn("tray.openVice", main)\n        self.assertIn("tray.quitVice", main)\n        tray = english_copy()["tray"]\n        self.assertEqual(tray["openVice"], "Open Vice")\n        self.assertEqual(tray["quitVice"], "Quit Vice")\n\n    def test_clipboard_falls_back_when_the_async_api_is_unavailable(self) -> None:\n        clipboard = (UI_SRC / "lib" / "clipboard.ts").read_text()\n        self.assertIn("pywebview", clipboard)\n        self.assertIn("execCommand", clipboard)''',
+          )
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install UI dependencies
+        run: npm ci
+
+      - name: Check translations and TypeScript
+        run: |
+          npm run i18n:check
+          npm run typecheck
+
+      - name: Rebuild committed UI bundle
+        run: npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+
+      - name: Test Python 3.10
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m unittest discover -s tests
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Test Python 3.12
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m unittest discover -s tests
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+
+      - name: Test Python 3.13
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m unittest discover -s tests
+
+      - name: Commit tested implementation to temporary branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ui-src/locales/en.json ui-src/lib/env.ts ui-src/main.tsx \
+                  vice/app.py vice/tray.py tests/test_tray.py tests/test_ui_static.py \
+                  vice/ui/scripts/app.js
+          git commit -m "Localize system tray actions"
+          git push origin HEAD:review/system-tray-i18n-test
