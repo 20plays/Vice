@@ -24,7 +24,7 @@ no-webview = []
 
 [project.scripts]
 vice     = "vice.main:cli"
-vice-app = "vice.app:main"
+vice-app = "vice.tray_app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
