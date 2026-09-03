@@ -159,10 +159,7 @@ def _stop_command_server() -> None:
 
 
 def _tray_icon(QIcon: Any) -> Any:
-    icon = QIcon.fromTheme("vice")
-    if not icon.isNull():
-        return icon
-
+    """Load Vice's own logo, never a theme substitute, when it is available."""
     candidates = (
         Path.home() / ".local/share/icons/hicolor/scalable/apps/vice.svg",
         Path(__file__).resolve().parent.parent / "assets/vice.svg",
@@ -171,8 +168,13 @@ def _tray_icon(QIcon: Any) -> Any:
         if path.exists():
             icon = QIcon(str(path))
             if not icon.isNull():
+                _app.log.debug("Using Vice tray icon from %s", path)
                 return icon
-    return icon
+
+    # Last-resort fallback for unusual package layouts where neither copy of
+    # the official asset exists. KDE themes can map unknown names to a generic
+    # file icon, so this deliberately comes after the real Vice SVG paths.
+    return QIcon.fromTheme("vice")
 
 
 def _install_tray(native: Any, win: Any) -> None:
@@ -216,7 +218,8 @@ def _install_tray(native: Any, win: Any) -> None:
     icon = _tray_icon(QIcon)
     if icon.isNull():
         icon = native.windowIcon()
-    elif native.windowIcon().isNull():
+    else:
+        # Keep the native window and tray consistent with the official asset.
         native.setWindowIcon(icon)
 
     menu = QMenu(native)
