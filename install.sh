@@ -812,7 +812,18 @@ OPTIONAL = {
 }
 
 def _missing(deps):
-    return [pypi for mod, pypi in deps.items() if importlib.util.find_spec(mod) is None]
+    missing = []
+    for mod, pypi in deps.items():
+        try:
+            spec = importlib.util.find_spec(mod)
+        except (ImportError, ModuleNotFoundError, AttributeError):
+            # find_spec("parent.child") imports the parent package first.
+            # A completely absent optional parent (for example PyQt6)
+            # is simply a missing dependency, not an installer failure.
+            spec = None
+        if spec is None:
+            missing.append(pypi)
+    return missing
 
 core_missing = _missing(CORE)
 if core_missing:
