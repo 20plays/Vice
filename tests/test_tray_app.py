@@ -55,5 +55,44 @@ class TrayActivationTests(unittest.TestCase):
             fallback.assert_called_once_with()
 
 
+class TrayShutdownTests(unittest.TestCase):
+    def test_shutdown_stops_systemd_owner_then_ipc_and_waits(self) -> None:
+        result = mock.Mock(returncode=0, stderr="")
+        with mock.patch.object(
+            tray_app._app, "_systemd_unit_available", return_value=True
+        ), mock.patch.object(
+            tray_app.subprocess, "run", return_value=result
+        ) as run, mock.patch.object(
+            tray_app._app, "_stop_daemon"
+        ) as stop, mock.patch.object(
+            tray_app._app, "_wait_for_daemon_exit", return_value=True
+        ) as wait:
+            tray_app._stop_daemon_completely(timeout=0.25)
+
+        run.assert_called_once()
+        self.assertEqual(
+            run.call_args.args[0],
+            ["systemctl", "--user", "stop", "vice.service"],
+        )
+        stop.assert_called_once_with()
+        wait.assert_called_once_with(timeout=0.25)
+
+    def test_shutdown_without_systemd_still_stops_and_waits(self) -> None:
+        with mock.patch.object(
+            tray_app._app, "_systemd_unit_available", return_value=False
+        ), mock.patch.object(
+            tray_app.subprocess, "run"
+        ) as run, mock.patch.object(
+            tray_app._app, "_stop_daemon"
+        ) as stop, mock.patch.object(
+            tray_app._app, "_wait_for_daemon_exit", return_value=True
+        ) as wait:
+            tray_app._stop_daemon_completely(timeout=0.25)
+
+        run.assert_not_called()
+        stop.assert_called_once_with()
+        wait.assert_called_once_with(timeout=0.25)
+
+
 if __name__ == "__main__":
     unittest.main()

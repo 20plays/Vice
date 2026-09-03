@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -158,6 +159,51 @@ def _stop_command_server() -> None:
         server.close()
 
 
+def _stop_daemon_completely(timeout: float = 10.0) -> None:
+    """Stop every Vice recorder owner and wait until it is actually gone."""
+    # If the installer created a user service, systemd owns the daemon.
+    # Stopping the unit first also suppresses Restart= while this explicit
+    # quit is in progress. The IPC stop below remains a fallback for a
+    # daemon that was launched directly or escaped the unit.
+    if _app._systemd_unit_available():
+        try:
+            result = subprocess.run(
+                ["systemctl", "--user", "stop", "vice.service"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode != 0:
+                _app.log.warning(
+                    "systemctl stop vice.service failed (%s): %s",
+                    result.returncode,
+                    (result.stderr or "").strip()[:200],
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            _app.log.warning("Could not stop Vice systemd service: %s", exc)
+
+    _app._stop_daemon()
+    _app._wait_for_daemon_exit(timeout=timeout)
+
+
+def _request_quit(win: Any) -> None:
+    """Request a real application quit instead of a hide-to-tray close."""
+    controller = getattr(win, "_vice_tray_controller", None)
+    if controller is not None:
+        controller.quit_requested.emit()
+        return
+
+    # Non-Qt fallback. This may block briefly, but it guarantees that an
+    # explicit Quit does not leave the recorder/hotkey daemon behind.
+    _stop_daemon_completely()
+    try:
+        win.destroy()
+    except Exception:
+        _app.log.debug("win.destroy() failed during quit", exc_info=True)
+
+
 def _tray_icon(QIcon: Any) -> Any:
     """Load Vice's own logo, never a theme substitute, when it is available."""
     candidates = (
@@ -186,11 +232,32 @@ def _install_tray(native: Any, win: Any) -> None:
     class _TrayController(QtCore.QObject):
         show_requested = QtCore.Signal()
         hide_requested = QtCore.Signal()
+        quit_requested = QtCore.Signal()
+        quit_finished = QtCore.Signal()
 
         def __init__(self) -> None:
             super().__init__(native)
+            self._allow_close = False
+            self._quitting = False
             self.show_requested.connect(self.show_window)
             self.hide_requested.connect(self.hide_window)
+            self.quit_requested.connect(self.quit_vice)
+            self.quit_finished.connect(self._finish_quit)
+            native.installEventFilter(self)
+
+        def eventFilter(self, watched: Any, event: Any) -> bool:
+            # The window-manager X button is another way of saying
+            # "keep Vice running in the tray". Consume the native close
+            # event so pywebview cannot destroy the QMainWindow/tray.
+            if (
+                watched is native
+                and event.type() == QtCore.QEvent.Type.Close
+                and not self._allow_close
+            ):
+                event.ignore()
+                native.hide()
+                return True
+            return super().eventFilter(watched, event)
 
         @QtCore.Slot()
         def show_window(self) -> None:
@@ -211,7 +278,32 @@ def _install_tray(native: Any, win: Any) -> None:
 
         @QtCore.Slot()
         def quit_vice(self) -> None:
-            _app._stop_daemon()
+            if self._quitting:
+                return
+            self._quitting = True
+            threading.Thread(
+                target=self._shutdown_worker,
+                name="vice-tray-quit",
+                daemon=True,
+            ).start()
+
+        def _shutdown_worker(self) -> None:
+            try:
+                _stop_daemon_completely()
+            except Exception:
+                _app.log.exception("Could not fully stop Vice during tray quit")
+            finally:
+                self.quit_finished.emit()
+
+        @QtCore.Slot()
+        def _finish_quit(self) -> None:
+            # Only an explicit Quit gets permission to pass through the
+            # close-event filter. Hide the tray first so it disappears
+            # immediately when the native window exits.
+            self._allow_close = True
+            tray = getattr(native, "_vice_tray", None)
+            if tray is not None:
+                tray.hide()
             native.close()
 
     controller = _TrayController()
@@ -299,6 +391,10 @@ def _install_webview_hooks() -> None:
             # Vice's native "minimize" control used to destroy the window.
             # Hiding it keeps this process (and therefore the tray icon) alive.
             api.keep_running = lambda: _request_hide(win)
+        if api is not None and hasattr(api, "quit_app"):
+            # Route the in-app Quit control through the exact same verified
+            # shutdown path as the tray menu.
+            api.quit_app = lambda: _request_quit(win)
         _start_command_server(win)
         return win
 
