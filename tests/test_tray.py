@@ -122,6 +122,18 @@ class LifecycleTests(unittest.TestCase):
             shutdown.assert_called_once_with()
             self.assertEqual(win.destroyed, 1)
 
+    def test_translated_labels_are_dispatched_without_recreating_tray(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            win = _Window()
+            controller = _controller(win, Path(tmp) / "vice-app.sock")
+            controller._dispatcher = mock.Mock()
+            controller.set_labels("Ouvrir Vice", "Quitter Vice")
+            self.assertEqual(controller._open_label, "Ouvrir Vice")
+            self.assertEqual(controller._quit_label, "Quitter Vice")
+            controller._dispatcher.labels_requested.emit.assert_called_once_with(
+                "Ouvrir Vice", "Quitter Vice"
+            )
+
     def test_backend_change_clears_previous_tray_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             win = _Window()

@@ -962,6 +962,11 @@ def _run_webview(url: str) -> None:
             if self._win:
                 self._win.destroy()
 
+        def set_tray_labels(self, open_label: str, quit_label: str) -> None:
+            """Update native tray text with strings resolved by the web UI."""
+            if self._tray_controller is not None:
+                self._tray_controller.set_labels(open_label, quit_label)
+
         def open_url(self, url: str) -> None:
             """Open a URL in the system's default browser via xdg-open."""
             import subprocess as _sp

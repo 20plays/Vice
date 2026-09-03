@@ -120,6 +120,8 @@ class WindowTrayController:
         self._open_action: Any = None
         self._quit_action: Any = None
         self._activated: Any = None
+        self._open_label = "Open Vice"
+        self._quit_label = "Quit Vice"
         self._quitting = False
         self._closed = False
 
@@ -196,12 +198,14 @@ class WindowTrayController:
             show_requested = QtCore.Signal()
             hide_requested = QtCore.Signal()
             close_requested = QtCore.Signal()
+            labels_requested = QtCore.Signal(str, str)
 
             def __init__(self) -> None:
                 super().__init__(native)
                 self.show_requested.connect(self.show_window)
                 self.hide_requested.connect(native.hide)
                 self.close_requested.connect(self.close_window)
+                self.labels_requested.connect(self.set_labels)
 
             @QtCore.Slot()
             def show_window(self) -> None:
@@ -222,6 +226,13 @@ class WindowTrayController:
                     controller._tray.hide()
                 native.close()
 
+            @QtCore.Slot(str, str)
+            def set_labels(self, open_label: str, quit_label: str) -> None:
+                if controller._open_action is not None:
+                    controller._open_action.setText(open_label)
+                if controller._quit_action is not None:
+                    controller._quit_action.setText(quit_label)
+
         self._dispatcher = _QtDispatcher()
         icon = self._load_icon(QIcon)
         if icon.isNull():
@@ -230,10 +241,10 @@ class WindowTrayController:
             native.setWindowIcon(icon)
 
         menu = QMenu(native)
-        open_action = menu.addAction("Open Vice")
+        open_action = menu.addAction(self._open_label)
         open_action.triggered.connect(self.show_window)
         menu.addSeparator()
-        quit_action = menu.addAction("Quit Vice")
+        quit_action = menu.addAction(self._quit_label)
         quit_action.triggered.connect(self.quit)
 
         tray = QSystemTrayIcon(icon, native)
@@ -300,6 +311,18 @@ class WindowTrayController:
             self.hide_window()
         else:
             self._win.destroy()
+
+    def set_labels(self, open_label: str, quit_label: str) -> None:
+        """Store translated action labels and update Qt actions on its thread."""
+        if open_label:
+            self._open_label = str(open_label)
+        if quit_label:
+            self._quit_label = str(quit_label)
+        if self._dispatcher is not None:
+            try:
+                self._dispatcher.labels_requested.emit(self._open_label, self._quit_label)
+            except Exception:
+                self._log.debug("Could not update tray action labels", exc_info=True)
 
     def quit(self) -> None:
         """Stop recorder ownership completely, then close the GUI and tray."""
