@@ -122,7 +122,7 @@ export function Viewer(props: ViewerProps) {
   const failed = useVideoFailure(videoRef);
 
   const index = clip ? clips.findIndex(c => c.slug === clip.slug) : -1;
-  const open = clip !== null;
+  const open = props.clip !== null;
 
   // Attach the source only when it actually changes. Stepping back to the clip
   // already loaded must not reload it, because a fresh load is what counts as
@@ -343,11 +343,26 @@ export function Viewer(props: ViewerProps) {
     if (trimOpen) videoRef.current?.pause();
   }, [trimOpen, clip]);
 
+  const toggle = useCallback(() => {
+    const video = videoRef.current;
+    if (!video?.getAttribute('src')) return;
+    if (video.paused) playQuietly(video);
+    else video.pause();
+  }, []);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open || closing || trimOpen) return;
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target?.closest('input, textarea, select') || target?.isContentEditable) return;
+      if (e.code === 'Space' || e.key === ' ') {
+        // Let a focused control keep its native keyboard activation.
+        if (target?.closest('button, a, [role="button"], [role="switch"]')) return;
+        e.preventDefault();
+        if (!e.repeat) toggle();
+        return;
+      }
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         step(-1);
@@ -370,19 +385,12 @@ export function Viewer(props: ViewerProps) {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, step, addHighlight, toggleExpanded, saveFrame, toggleMuted]);
+  }, [open, closing, trimOpen, step, addHighlight, toggleExpanded, saveFrame, toggleMuted, toggle]);
 
   if (!mounted || !clip) return null;
 
   const duration = position.duration;
   const percent = duration > 0 ? (position.current / duration) * 100 : 0;
-
-  const toggle = () => {
-    const video = videoRef.current;
-    if (!video?.getAttribute('src')) return;
-    if (video.paused) playQuietly(video);
-    else video.pause();
-  };
 
   const seekFromPointer = (clientX: number) => {
     const track = timelineRef.current;

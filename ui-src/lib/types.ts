@@ -17,6 +17,7 @@ export interface Clip {
   width: number | null;
   height: number | null;
   vcodec: string | null;
+  audio_tracks?: Array<{index: number; title: string; language: string; channels: number}>;
   /** Set when ffprobe could not read the file. The clip is left on disk. */
   unreadable: boolean;
   unreadable_reason: string;

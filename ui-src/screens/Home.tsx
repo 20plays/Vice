@@ -2,6 +2,8 @@ import {useMemo, useState} from 'react';
 
 import {useStore} from '../state/store';
 import {useClipActions} from '../state/clipActions';
+import {useImageActions} from '../state/imageActions';
+import {ImageCard} from '../components/ImageCard';
 import {usePlaylistDropTarget} from '../lib/clipDrag';
 import {api} from '../lib/api';
 import {copyToClipboard} from '../lib/clipboard';
@@ -115,6 +117,8 @@ export function Home() {
   };
 
   return (
+    <div className="home-layout">
+      <div className="home-columns">
     <div className="home">
       <header className="home-hero">
         <h1>{greeting()}</h1>
@@ -325,6 +329,33 @@ export function Home() {
         <p>{t('home.restartBody')}</p>
       </Modal>
     </div>
+        <HomeImages />
+      </div>
+    </div>
+  );
+}
+
+function HomeImages() {
+  const {state, dispatch} = useStore();
+  const {actions, overlays} = useImageActions();
+  if (!state.images.length) return null;
+  return (
+    <aside className="home-images" aria-label={t('images.heading')}>
+      <header className="home-images-head">
+        <div>
+          <h2>{t('images.heading')}</h2>
+          <p>{t('images.countImages', {count: state.images.length})}</p>
+        </div>
+        <button type="button" className="section-link"
+          onClick={() => dispatch({type: 'setView', view: 'images', playlistId: null})}>
+          {t('home.seeAll')}
+        </button>
+      </header>
+      <div className="clip-grid">
+        {state.images.map(image => <ImageCard key={image.slug} image={image} draggable actions={actions} />)}
+      </div>
+      {overlays}
+    </aside>
   );
 }
 

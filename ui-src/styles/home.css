@@ -1053,3 +1053,29 @@ kbd {
   flex-direction: column;
   gap: var(--spacing-3);
 }
+
+.home-layout { container-type: inline-size; }
+.home-images { display: none; }
+.home-images-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--spacing-4);
+  margin-bottom: var(--spacing-6);
+}
+.home-images-head h2 {
+  margin: 0 0 var(--spacing-2);
+  font-size: var(--text-heading-1-size);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.home-images-head p { margin: 0; color: var(--color-text-secondary); line-height: 1.6; }
+@container (min-width: 1580px) {
+  .home-columns {
+    display: grid;
+    grid-template-columns: 1180px minmax(0, 1fr);
+    align-items: start;
+    gap: var(--spacing-6);
+  }
+  .home-images { display: block; min-width: 0; }
+}
