@@ -35,6 +35,7 @@ depends=(
 )
 optdepends=(
     'wf-recorder: Wayland fallback recording backend'
+    'kdotool: game detection on KDE Plasma Wayland'
 )
 makedepends=(
     'python-build'

@@ -679,6 +679,29 @@ class CompositorAdapterTests(unittest.TestCase):
             "pid": 75457,
         })
 
+    def test_kde_falls_back_to_xwayland_when_kdotool_says_nothing(self):
+        # kdotool is installed but KWin answered with nothing, which is what a
+        # native Wayland window looks like. Silence must not end detection.
+        from vice import active_window as aw
+
+        with mock.patch.object(aw, "_run", return_value=""), \
+            mock.patch.dict(os.environ, {"DISPLAY": ":1"}, clear=False), \
+            mock.patch.object(aw, "_get_active_window_x11", return_value={
+                "process": "hl2.exe", "class": "hl2_linux", "pid": 42,
+            }) as x11:
+            window = aw._get_active_window_kde()
+
+        self.assertEqual(window["process"], "hl2.exe")
+        self.assertEqual(x11.call_count, 1)
+
+    def test_kde_reports_nothing_when_there_is_no_xwayland_either(self):
+        from vice import active_window as aw
+
+        env = {k: v for k, v in os.environ.items() if k != "DISPLAY"}
+        with mock.patch.object(aw, "_run", return_value=""), \
+            mock.patch.dict(os.environ, env, clear=True):
+            self.assertIsNone(aw._get_active_window_kde())
+
     def test_headless_wayland_unsupported(self):
         # No DISPLAY → no XWayland → no adapter.
         adapter = self._detect({
