@@ -138,7 +138,7 @@ OBS has a replay buffer. So why use Vice?
 
 `gpu-screen-recorder` is the default backend everywhere. `wf-recorder` (Wayland) and `ffmpeg x11grab` (X11) exist as explicit opt-ins via `recording.backend` for unusual setups; they are never auto-selected.
 
-Game detection (filename tagging and Discord presence) works on X11, Hyprland, and sway. On other compositors clips simply save untagged.
+Game detection (filename tagging and Discord presence) works on X11, Hyprland, and sway. Works on KDE Plasma Wayland when `kdotool` is available. On other compositors clips simply save untagged.
 
 ## CLI
 
