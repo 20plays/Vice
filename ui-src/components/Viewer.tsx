@@ -14,7 +14,7 @@ import {
   videoFailureMessage,
 } from '../lib/playback';
 import {clipTitle, imageTitle, type Clip, type Highlight} from '../lib/types';
-import {IconClose} from './Icons';
+import {IconClose, IconExpand} from './Icons';
 import {InlineRename} from './InlineRename';
 import {t, tNode} from '../lib/i18n';
 
@@ -541,7 +541,7 @@ export function Viewer(props: ViewerProps) {
               aria-pressed={expanded}
               title={expanded ? t('viewer.shrinkHint') : t('viewer.expandHint')}
               aria-label={expanded ? t('viewer.shrink') : t('viewer.expand')}>
-              <ExpandGlyph collapse={expanded} />
+              <IconExpand collapse={expanded} />
             </button>
             <button type="button" className="modal-close" onClick={onClose} aria-label={t('common.close')}>
               <IconClose size={15} />
@@ -623,7 +623,7 @@ export function Viewer(props: ViewerProps) {
                   className="player-btn"
                   onClick={toggleExpanded}
                   aria-label={t('viewer.shrink')}>
-                  <ExpandGlyph collapse />
+                  <IconExpand collapse />
                 </button>
               </div>
             ) : null}
@@ -1089,19 +1089,6 @@ const CameraGlyph = () => (
   <svg {...stroke} width={15} height={15} strokeWidth={2}>
     <path d="M3 8.5A1.5 1.5 0 0 1 4.5 7h2L8 4.5h8L17.5 7h2A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" />
     <circle cx="12" cy="13" r="3.4" />
-  </svg>
-);
-/* Corners pointing out to grow, pointing in to shrink. The same pair the
-   browser chrome uses, which is what people already read as this gesture. */
-const ExpandGlyph = ({collapse}: {collapse?: boolean}) => (
-  <svg {...stroke} width={15} height={15} strokeWidth={2}>
-    <path
-      d={
-        collapse
-          ? 'M9 3v4a2 2 0 0 1-2 2H3M15 3v4a2 2 0 0 0 2 2h4M9 21v-4a2 2 0 0 0-2-2H3M15 21v-4a2 2 0 0 1 2-2h4'
-          : 'M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4'
-      }
-    />
   </svg>
 );
 /* Three states rather than two: at a glance the difference between quiet and

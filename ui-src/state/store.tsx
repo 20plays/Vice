@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   type ReactNode,
 } from 'react';
 
@@ -482,7 +483,14 @@ export function StoreProvider({children}: {children: ReactNode}) {
     }
   }, []);
 
-  useEffect(() => connectWs(msg => dispatch({type: 'ws', msg})), []);
+  // Bumped by every picture event, so a list fetched before one can tell it is
+  // out of date. Listing probes every file and takes about a second on a real
+  // library, long enough to delete a picture while a stale copy is in flight.
+  const imageEvents = useRef(0);
+  useEffect(() => connectWs(msg => {
+    if (msg.type === 'image_saved' || msg.type === 'image_deleted') imageEvents.current += 1;
+    dispatch({type: 'ws', msg});
+  }), []);
 
   // Transient island events expire on their own.
   useEffect(() => {
@@ -513,7 +521,10 @@ export function StoreProvider({children}: {children: ReactNode}) {
   }, []);
 
   const refreshImages = useCallback(async () => {
-    dispatch({type: 'setImages', images: await api.images()});
+    const seen = imageEvents.current;
+    const images = await api.images();
+    // The events that arrived meanwhile are newer than this list and already applied.
+    if (imageEvents.current === seen) dispatch({type: 'setImages', images});
   }, []);
 
   const refreshPlaylists = useCallback(async () => {
