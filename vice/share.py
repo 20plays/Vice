@@ -710,16 +710,19 @@ async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
     return thumb
 
 
-# OpenGraph only, no twitter:card. twitter:player must point at an
-# embeddable HTML page, not a raw video file, and Discord does not iframe
-# arbitrary players anyway: when a player card is present and unusable,
-# Discord renders no embed at all (issues #77, #100). Plain og:video with
-# a direct file URL is the pattern working self-hosted sharers use.
+# Discord can use the Twitter player metadata to skip its thumbnailing pass
+# for direct video links. Keep the OpenGraph metadata as the fallback used by
+# other unfurlers (issues #77, #100, #207).
 _EMBED_PAGE = """\
 <!DOCTYPE html>
 <html><head>
   <meta charset="utf-8">
   <meta name="theme-color"              content="{color}">
+  <meta name="twitter:card"             content="player">
+  <meta name="twitter:player"           content="{video_url}">
+  <meta name="twitter:player:stream"    content="{video_url}">
+  <meta name="twitter:player:stream:content_type" content="{video_type}">
+  <meta name="twitter:image"            content="{thumb_url}">
   <meta property="og:site_name"         content="Vice">
   <meta property="og:type"              content="video.other">
   <meta property="og:url"               content="{page_url}">
