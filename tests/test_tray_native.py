@@ -6,8 +6,8 @@ Run these tests with the Qt pywebview dependencies:
 
 They are opt-in because importing QtWebEngine can abort the interpreter when a
 host has no usable Qt platform plugin; that cannot be expressed as a normal
-unittest skip from inside the process. The child uses Qt's offscreen platform
-to provide a real native window and a deterministic absence of a tray host.
+unittest skip from inside the process. The child uses Qt's offscreen platform for a real native window and explicitly
+forces Qt's tray-host probe false so the fallback is deterministic everywhere.
 """
 
 from __future__ import annotations
@@ -28,8 +28,10 @@ import fcntl
 import logging
 import sys
 from pathlib import Path
+from unittest import mock
 
 import webview
+from qtpy.QtWidgets import QSystemTrayIcon
 
 from vice.app import _close_window_after_bridge
 from vice.tray import WindowTrayController
@@ -76,7 +78,8 @@ controller = WindowTrayController(
 )
 api.controller = controller
 controller.start()
-webview.start(gui="qt", debug=False, private_mode=True)
+with mock.patch.object(QSystemTrayIcon, "isSystemTrayAvailable", return_value=False):
+    webview.start(gui="qt", debug=False, private_mode=True)
 print("EXITED", flush=True)
 """
 

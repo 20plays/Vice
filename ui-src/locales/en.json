@@ -59,6 +59,13 @@
     "greetingAfternoon": "Good afternoon",
     "greetingEvening": "Good evening",
     "quickSettings": "Quick settings",
+    "storage": "Storage",
+    "diskFree": "Free space",
+    "diskLibrary": "Vice library",
+    "diskUnknown": "Not measured",
+    "lastClip": "Last clip",
+    "lastClipNever": "None yet",
+    "diskBar": "{used} of {total} used, {library} of it Vice",
     "microphone": "Microphone",
     "desktopAudio": "Desktop audio",
     "publicLink": "Public link",
@@ -332,6 +339,10 @@
     "emptySearch": "Nothing matches “{query}”.",
     "emptyLibrary": "No screenshots yet. Press {hotkey} to save what is on screen.",
     "emptyNoKey": "No screenshots yet. Set a screenshot key in Settings, or open a clip and save a frame from it.",
+    "captureMoment": "Keep a moment",
+    "roomForMore": "Room for your next moment",
+    "captureHint": "Press {hotkey} to save a screenshot.",
+    "captureNoKey": "Set a screenshot key in Settings, or save a frame from a clip.",
     "openTitle": "Open {name}",
     "open": "Open",
     "openExternally": "Open in image viewer",
@@ -355,7 +366,7 @@
     "errCanvas": "This window could not render the image",
     "prev": "Previous image",
     "next": "Next image",
-    "shortcuts": "Arrows step, Ctrl+Z undoes, Esc closes"
+    "shortcuts": "Arrows step, F fills the window, Ctrl+Z undoes, Esc closes"
   },
   "tutorial": {
     "pickColour": "Pick a colour",

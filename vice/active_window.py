@@ -1,4 +1,4 @@
-"""Active-window detection: adapters for X11, Hyprland and Sway.
+"""Active-window detection: adapters for X11, Hyprland, Sway and KDE Plasma.
 
 Each adapter shells out to the compositor's CLI/IPC and returns
 {"process": str, "class": str, "pid": int} or None. On other Wayland
@@ -6,6 +6,9 @@ sessions (KDE Plasma/KWin, GNOME/Mutter) where DISPLAY is set, we fall back
 to the X11 adapter via XWayland, which resolves any focused XWayland window.
 That covers most games (Steam/Proton, Lutris). Focused native-Wayland
 windows yield no result on those compositors, so detection returns None.
+
+KDE Plasma Wayland uses kdotool when available, with the existing
+XWayland adapter retained as a fallback.
 """
 
 from __future__ import annotations
@@ -131,6 +134,23 @@ def _get_active_window_sway() -> Optional[ActiveWindow]:
     )
     proc = _read_proc_comm(pid) if pid else ""
     if not (cls or proc):
+        return None
+    return {"process": proc, "class": cls, "pid": pid}
+
+# ─── KDE Plasma / KWin ─────────────────────────────────────────────────────
+def _get_active_window_kde() -> Optional[ActiveWindow]:
+    pid_text = _run(["kdotool", "getactivewindow", "getwindowpid"]).strip()
+    try:
+        pid = int(pid_text) if pid_text else 0
+    except ValueError:
+        pid = 0
+
+    cls = _run(["kdotool", "getactivewindow", "getwindowclassname"]).strip()
+
+    proc = _read_proc_comm(pid) if pid else ""
+    if not (cls or proc):
+        if os.environ.get("DISPLAY"):
+            return _get_active_window_x11()
         return None
     return {"process": proc, "class": cls, "pid": pid}
 
@@ -361,18 +381,26 @@ def pointer_display_supported() -> bool:
 
 
 def detection_tools_status() -> dict:
-    """Which X11 window-detection tools are installed, for doctor and logs."""
+    """Which window-detection tools are installed, for doctor and logs."""
     import shutil
-    return {tool: bool(shutil.which(tool)) for tool in ("xdotool", "xprop", "wmctrl")}
+    return {tool: bool(shutil.which(tool)) for tool in ("xdotool", "xprop", "wmctrl", "kdotool")}
 
 
 # ─── compositor detection (one-shot at import time) ─────────────────────────
 
 def _detect_compositor_adapter() -> Optional[Callable[[], Optional[ActiveWindow]]]:
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
         return _get_active_window_hyprland
     if os.environ.get("SWAYSOCK"):
         return _get_active_window_sway
+    if os.environ.get("WAYLAND_DISPLAY") and ("kde" in desktop or "plasma" in desktop):
+        import shutil
+        if shutil.which("kdotool"):
+            return _get_active_window_kde
+        if os.environ.get("DISPLAY"):
+            return _get_active_window_x11
+        return None
     if os.environ.get("XDG_SESSION_TYPE") == "x11" or (
         os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY")
     ):
@@ -431,5 +459,6 @@ def adapter_name() -> str:
     return {
         _get_active_window_hyprland: "hyprland",
         _get_active_window_sway:     "sway",
+        _get_active_window_kde:      "kde",
         _get_active_window_x11:      "x11",
     }.get(_current_adapter(), "none")

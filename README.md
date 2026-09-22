@@ -138,7 +138,7 @@ OBS has a replay buffer. So why use Vice?
 
 `gpu-screen-recorder` is the default backend everywhere. `wf-recorder` (Wayland) and `ffmpeg x11grab` (X11) exist as explicit opt-ins via `recording.backend` for unusual setups; they are never auto-selected.
 
-Game detection (filename tagging and Discord presence) works on X11, Hyprland, and sway. On other compositors clips simply save untagged.
+Game detection (filename tagging and Discord presence) works on X11, Hyprland, and sway. Works on KDE Plasma Wayland when `kdotool` is available. On other compositors clips simply save untagged.
 
 ## CLI
 
@@ -351,6 +351,7 @@ Vice is better because these people sent patches:
 - [@jethrothelion](https://github.com/jethrothelion), for Chivalry 2 and Clone Drone in The Danger Zone
 - [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, and Sandustry
 - [@20plays](https://github.com/20plays), for preserving working Arch installations during installer dependency checks and selecting the distro Python for QtWebEngine
+- [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 

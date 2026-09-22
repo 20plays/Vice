@@ -87,6 +87,8 @@ export interface Status {
   recorder_error: string | null;
   cpu_fallback: boolean;
   codec_fallback: boolean;
+  /** Where clips land. Absent when the drive could not be measured. */
+  disk?: {free: number; total: number} | null;
   update?: UpdateInfo | null;
 }
 

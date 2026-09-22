@@ -123,7 +123,6 @@ export function setNativeTrayLabels(openLabel: string, quitLabel: string): void 
   };
 
   if (apply()) return;
-  // pywebview documents that its JS API may arrive after the page itself.
   window.addEventListener('pywebviewready', () => { apply(); }, {once: true});
 }
 
