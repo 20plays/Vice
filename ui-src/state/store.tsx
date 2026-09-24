@@ -358,6 +358,17 @@ function reduceWs(state: State, msg: WsMessage): State {
         },
       );
 
+    case 'share_links_changed':
+      return {
+        ...state,
+        clips: state.clips.map(clip => {
+          const shareUrl = msg.links[clip.slug];
+          return shareUrl === undefined
+            ? clip
+            : {...clip, share_url: shareUrl, share_is_public: msg.share_is_public};
+        }),
+      };
+
     case 'session_start':
       return withEvent(
         {

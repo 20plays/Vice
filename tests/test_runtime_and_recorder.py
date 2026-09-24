@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import shutil
 import signal
@@ -18,6 +19,7 @@ from vice import audio as audio_mod
 from vice import config as config_mod
 from vice import main as main_mod
 from vice import media as media_mod
+from vice import recorder as recorder_mod
 from vice import share as share_mod
 from vice.main import _RECORDER_DEATH_BACKOFF_AFTER
 from vice.config import Config, HotkeyClipPreset, HotkeyConfig, OutputConfig, RecordingConfig, SharingConfig
@@ -54,6 +56,11 @@ from vice.runtime import (
     actual_home_dir,
     normalize_runtime_environment,
 )
+
+# ShareServer issues share tokens as soon as it lists a clip. Send them to a
+# scratch file for the whole run, or these tests write into the real home.
+_SHARE_TOKENS = tempfile.TemporaryDirectory()
+share_mod.SHARE_TOKENS_PATH = Path(_SHARE_TOKENS.name) / "share_tokens.json"
 
 try:
     from vice.share import ShareServer
@@ -1040,7 +1047,7 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ready)
 
     async def test_trim_copy_command_avoids_negative_timestamps(self) -> None:
-        captured: dict = {}
+        commands: list = []
 
         async def _fake_duration(_: Path) -> float:
             return 100.0
@@ -1052,7 +1059,7 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
                 return b"", b""
 
         async def _fake_exec(*cmd, **_kwargs):
-            captured["cmd"] = list(cmd)
+            commands.append(list(cmd))
             return _Proc()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1066,7 +1073,8 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
 
                     await _trim_to_last_n_seconds(clip, 30)
 
-        cmd = captured["cmd"]
+        # The copy trim runs first; a re-encode only follows if it fails.
+        cmd = commands[0]
         self.assertIn("-avoid_negative_ts", cmd)
         self.assertEqual(cmd[cmd.index("-avoid_negative_ts") + 1], "make_zero")
         self.assertIn("copy", cmd)
@@ -1439,6 +1447,24 @@ class GSRStartFallbackTests(unittest.IsolatedAsyncioTestCase):
         # Nothing was forced, so there is no codec to avoid and no retry.
         self.assertEqual(attempts, [(False, None), (True, None)])
 
+    async def test_no_hardware_codec_error_reaches_cpu_fallback(self) -> None:
+        recorder = self._recorder(encoder="auto")
+        attempts: list = []
+
+        async def fail_gpu_then_start_cpu(cpu_encoder: bool, avoid_codec=None):
+            attempts.append((cpu_encoder, avoid_codec))
+            if cpu_encoder:
+                return None
+            return (
+                "gsr error: no video encoder was specified and neither h264, "
+                "hevc nor av1 are supported on your system"
+            )
+
+        await self._run(recorder, fail_gpu_then_start_cpu, frozenset({"h264_software", "vp9"}))
+
+        self.assertEqual(attempts, [(False, None), (True, None)])
+        self.assertTrue(recorder.cpu_fallback)
+
     async def test_a_healthy_start_tries_once(self) -> None:
         recorder = self._recorder()
         attempts: list = []
@@ -1760,12 +1786,48 @@ class RecorderAudioCommandTests(unittest.TestCase):
         self.assertEqual(
             audio_values,
             [
-                "default_output|app:Discord|default_input",
+                "default_output|default_input",
                 "default_output",
                 "app:Discord",
                 "default_input",
             ],
         )
+
+    def test_mix_first_does_not_put_app_and_inverse_app_in_one_gsr_track(self) -> None:
+        from vice.recorder import _gsr_audio_args
+
+        rc = RecordingConfig(
+            capture_audio=True,
+            audio_tracks=["default_output", "app:Discord", "app-inverse:Discord"],
+            audio_tracks_mix_first=True,
+        )
+
+        self.assertEqual(
+            _gsr_audio_args(rc),
+            [
+                "-a", "default_output",
+                "-a", "default_output",
+                "-a", "app:Discord",
+                "-a", "app-inverse:Discord",
+            ],
+        )
+
+    def test_mix_first_keeps_app_directions_separate_without_monitor(self) -> None:
+        from vice.recorder import _gsr_audio_args
+
+        rc = RecordingConfig(
+            capture_audio=True,
+            audio_tracks=["app:Discord", "app-inverse:Discord", "default_input"],
+            audio_tracks_mix_first=True,
+        )
+
+        with self.assertLogs("vice.recorder", level="WARNING") as logs:
+            args = _gsr_audio_args(rc)
+        self.assertEqual(
+            args,
+            ["-a", "app:Discord", "-a", "app-inverse:Discord", "-a", "default_input"],
+        )
+        self.assertIn("Cannot create a combined audio track", "\n".join(logs.output))
 
     def test_gsr_build_cmd_mix_first_skipped_for_single_track(self) -> None:
         recorder = GSRRecorder(
@@ -2733,6 +2795,9 @@ class VolumeBalanceTests(unittest.IsolatedAsyncioTestCase):
             "gsr error: Could not open video codec: Function not implemented"
         ))
         self.assertTrue(_looks_like_encoder_failure("failed to load libnvidia-encode.so"))
+        self.assertTrue(_looks_like_encoder_failure(
+            "gsr error: no video encoder was specified and neither h264, hevc nor av1 are supported"
+        ))
         # A bad monitor name is not worth retrying on the CPU.
         self.assertFalse(_looks_like_encoder_failure(
             "gsr error: monitor DP-9 not found"
@@ -3238,6 +3303,104 @@ class ProbeFailureReasonTests(unittest.IsolatedAsyncioTestCase):
         junk = self.dir / "junk2.mp4"
         junk.write_bytes(os.urandom(2048))
         self.assertIsNone(await media_mod.probe_media(junk))
+
+    def test_zero_duration_mp4_can_use_video_samples(self) -> None:
+        stream = {
+            "nb_frames": "3641",
+            "avg_frame_rate": "728200000/12136677",
+        }
+        self.assertAlmostEqual(
+            media_mod._duration_from_video_samples(stream),
+            60.6834,
+            places=3,
+        )
+        self.assertEqual(
+            media_mod._duration_from_video_samples({"nb_frames": "0", "avg_frame_rate": "60/1"}),
+            0.0,
+        )
+
+    @staticmethod
+    def _zero_duration_probe(frames: int, readable) -> mock.AsyncMock:
+        """ffprobe as it answers for an MP4 whose duration fields are zero:
+        first the metadata, then the packet count, or a failed count."""
+        payload = {
+            "format": {"duration": "N/A"},
+            "streams": [{
+                "codec_type": "video",
+                "width": 1920,
+                "height": 1080,
+                "codec_name": "h264",
+                "duration": "0",
+                "nb_frames": str(frames),
+                "avg_frame_rate": "728200000/12136677",
+            }],
+        }
+
+        def answer(stdout: bytes) -> mock.Mock:
+            process = mock.Mock(returncode=0)
+            process.communicate = mock.AsyncMock(return_value=(stdout, b""))
+            return process
+
+        count = answer(f"{readable}\n".encode()) if readable is not None else answer(b"")
+        return mock.AsyncMock(side_effect=[answer(json.dumps(payload).encode()), count])
+
+    async def test_probe_uses_samples_when_mp4_duration_fields_are_zero(self) -> None:
+        with mock.patch.object(media_mod.asyncio, "create_subprocess_exec",
+                               new=self._zero_duration_probe(3641, readable=3641)):
+            meta, why = await media_mod.probe_media_detailed(self.dir / "gsr.mp4")
+        self.assertEqual(why, "")
+        self.assertIsNotNone(meta)
+        self.assertAlmostEqual(meta["duration"], 60.6834, places=3)
+
+    async def test_probe_refuses_the_estimate_when_the_frames_cannot_be_read(self) -> None:
+        # #154's real file: 3655 frames in the index, all stamped at zero, and
+        # FFmpeg reads one of them. Calling it 60 seconds let the trim replace
+        # the recording with a single frame.
+        with mock.patch.object(media_mod.asyncio, "create_subprocess_exec",
+                               new=self._zero_duration_probe(3655, readable=1)):
+            meta, why = await media_mod.probe_media_detailed(self.dir / "gsr.mp4")
+        self.assertIsNone(meta)
+        self.assertIn("1 of its 3655 frames", why)
+
+    async def test_probe_keeps_the_estimate_when_the_count_is_unavailable(self) -> None:
+        # No count is no opinion, so behaviour is exactly what it was without it.
+        with mock.patch.object(media_mod.asyncio, "create_subprocess_exec",
+                               new=self._zero_duration_probe(3641, readable=None)):
+            meta, why = await media_mod.probe_media_detailed(self.dir / "gsr.mp4")
+        self.assertEqual(why, "")
+        self.assertAlmostEqual(meta["duration"], 60.6834, places=3)
+
+    def _long_clip(self, seconds: int) -> Path:
+        path = self.dir / "long.mp4"
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+             "-i", "testsrc=size=64x64:rate=15", "-t", str(seconds),
+             "-g", "15", str(path)],
+            check=True,
+        )
+        return path
+
+    async def test_a_healthy_trim_still_replaces_the_clip(self) -> None:
+        clip = self._long_clip(6)
+        await recorder_mod._trim_to_last_n_seconds(clip, 2)
+        self.assertLess(await media_mod.get_duration(clip), 3)
+        self.assertFalse(list(self.dir.glob("*.trim.*")))
+
+    async def test_a_trim_that_comes_out_broken_keeps_the_whole_clip(self) -> None:
+        # ffmpeg exits cleanly on the collapsed file and writes one frame. The
+        # original must survive, byte for byte, with nothing left behind.
+        clip = self._long_clip(6)
+        original = clip.read_bytes()
+
+        async def duration(path: Path) -> float:
+            return 60.0 if path == clip else 0.017
+
+        with mock.patch.object(recorder_mod, "_get_duration", new=duration):
+            with self.assertLogs("vice.recorder", level="ERROR") as caught:
+                await recorder_mod._trim_to_last_n_seconds(clip, 20)
+        self.assertEqual(clip.read_bytes(), original)
+        self.assertFalse(list(self.dir.glob("*.trim.*")))
+        self.assertIn("keeping the whole clip", "\n".join(caught.output))
 
     async def test_failure_is_logged_at_warning_with_the_file_name(self) -> None:
         junk = self.dir / "broken.mp4"

@@ -1,7 +1,7 @@
 """
 Vice share server, HTTP server that powers:
   • A local control UI/server  (/ → UI, /api/*, /ws, media)
-  • A public share-only server  (/c/{slug}, /v/{slug}, /t/{slug})
+  • A public share-only server  (/c/{token}, /v/{token}, /t/{token})
 
 WebSocket event types (server → client):
   {"type": "clip_saved",   "clip":  <clip_json>}
@@ -24,7 +24,9 @@ import glob
 import html
 import json
 import logging
+import os
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -203,6 +205,38 @@ def _save_views(views: dict[str, int]) -> None:
     tmp = VIEWS_PATH.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(views))
     tmp.replace(VIEWS_PATH)
+
+
+# Public links name a clip by a random token rather than its filename. Clip
+# names are sequential, so anyone holding one link could reach every other
+# clip by editing the number (#222). A token is all it takes to fetch a clip,
+# so the file is kept readable by its owner only.
+SHARE_TOKENS_PATH = actual_home_dir() / ".local" / "share" / "vice" / "share_tokens.json"
+
+
+def _load_share_tokens() -> dict[str, str]:
+    if not SHARE_TOKENS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(SHARE_TOKENS_PATH.read_text())
+        return {str(k): v for k, v in data.items() if isinstance(v, str) and v}
+    except Exception as exc:
+        # Failing closed: every clip gets a fresh token, so links shared
+        # before this point stop working rather than resolving to anything.
+        log.warning("Share link file %s is unreadable, issuing new links: %s",
+                    SHARE_TOKENS_PATH, exc)
+        return {}
+
+
+def _save_share_tokens(tokens: dict[str, str]) -> None:
+    SHARE_TOKENS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SHARE_TOKENS_PATH.with_suffix(".json.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # A leftover temp file from a crash keeps its old mode through O_CREAT.
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(tokens))
+    tmp.replace(SHARE_TOKENS_PATH)
 
 
 # Small bag of UI state that must outlive the web view. The native window's
@@ -649,7 +683,7 @@ async def _ffprobe(path: Path) -> dict:
         # served as-is.
         return meta or _unreadable_meta(why)
     log.warning("ffprobe cannot read %s (%s), attempting moov remux",
-                path.name, why or "no reason from ffprobe")
+                path.name, why or "it reads, but reports no duration")
     if await _remux_moov(path):
         meta, why = await probe_media_detailed(path)
         log.info(
@@ -753,6 +787,21 @@ _EMBED_PAGE = """\
 # pointed at Cloudflare's API, which answers "Method Not Allowed" (#143).
 _TRYCLOUDFLARE_RE = re.compile(r"https://([a-zA-Z0-9-]+)\.trycloudflare\.com")
 _NOT_A_TUNNEL = {"api", "www", "dash", "developers", "blog"}
+_TUNNEL_RETRY_INITIAL = 5.0
+_TUNNEL_RETRY_MAX = 300.0
+
+
+def _cloudflared_failure_detail(lines: list[str]) -> str:
+    """Return a short actionable cloudflared diagnostic from its output."""
+    relevant = [
+        line.strip()
+        for line in lines
+        if any(marker in line.lower() for marker in ("err", "error", "failed", "unable"))
+    ]
+    if not relevant:
+        return ""
+    detail = " | ".join(relevant[-3:])
+    return " ".join(detail.split())[:600]
 
 
 def _quick_tunnel_url(line: str) -> Optional[str]:
@@ -797,6 +846,8 @@ class ShareServer:
 
         self.playlists = PlaylistStore()
         self._views = _load_views()
+        self._share_tokens = _load_share_tokens()
+        self._share_slugs = {token: slug for slug, token in self._share_tokens.items()}
         self.editor_project = EditorProjectStore()
         self._exports = ExportManager(self.broadcast)
 
@@ -807,6 +858,8 @@ class ShareServer:
         self._proxy_stopping = False
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
+        self._tunnel_task: Optional[asyncio.Task] = None
+        self._tunnel_stopping = False
         self._tunnel_url:  Optional[str] = None
         self._local_base_url: Optional[str] = None
         self._public_bind_url: Optional[str] = None
@@ -839,11 +892,11 @@ class ShareServer:
                       lambda req, k=_kind: self._ui_asset(req, kind=k))
 
         # Discord embed pages
-        r.add_get("/c/{slug}",    self._embed_page)
+        r.add_get("/c/{ref}",     self._embed_page)
 
         # Media
-        r.add_get("/v/{slug}",    self._video)
-        r.add_get("/t/{slug}",    self._thumb)
+        r.add_get("/v/{ref}",     self._video)
+        r.add_get("/t/{ref}",     self._thumb)
         # Images, local only. There is no share link for a screenshot, so
         # these have no counterpart on the public app below.
         r.add_get("/i/{slug}",    self._image_file)
@@ -899,9 +952,9 @@ class ShareServer:
 
     def _setup_public_routes(self) -> None:
         r = self._public_app.router
-        r.add_get("/c/{slug}", self._embed_page)
-        r.add_get("/v/{slug}", self._video)
-        r.add_get("/t/{slug}", self._thumb)
+        r.add_get("/c/{ref}", self._public_embed_page)
+        r.add_get("/v/{ref}", self._public_video)
+        r.add_get("/t/{ref}", self._public_thumb)
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -912,6 +965,7 @@ class ShareServer:
             media = list(out_dir.glob("*.mp4")) + list(out_dir.glob("*.mkv"))
             for clip in sorted(media, key=lambda p: p.stat().st_mtime):
                 self._clips[clip.stem] = clip
+        self._ensure_share_tokens()
         self.rescan_images()
         # Both indexes in one call. backfill drops membership for anything not
         # in the set it is given, so handing it the clips alone would empty
@@ -978,12 +1032,14 @@ class ShareServer:
                 await ws.close()
             except Exception as exc:
                 log.debug("A websocket client did not close cleanly: %s", exc)
-        if self._tunnel_proc:
-            try:
-                self._tunnel_proc.terminate()
-                await asyncio.wait_for(self._tunnel_proc.wait(), timeout=5)
-            except Exception as exc:
-                log.debug("cloudflared did not stop cleanly: %s", exc)
+        self._tunnel_stopping = True
+        tunnel_task = getattr(self, "_tunnel_task", None)
+        if tunnel_task:
+            tunnel_task.cancel()
+            await asyncio.gather(tunnel_task, return_exceptions=True)
+            self._tunnel_task = None
+        elif getattr(self, "_tunnel_proc", None):
+            await self._stop_tunnel_process(self._tunnel_proc)
         if self._local_runner:
             await self._local_runner.cleanup()
         if self._public_runner:
@@ -997,9 +1053,11 @@ class ShareServer:
         self._clips[slug] = path
         self._meta.pop(slug, None)
         # A fresh recording under a reused clip number must not inherit the
-        # old clip's view count.
+        # old clip's view count, nor its link: anyone still holding the old
+        # one would be shown the new recording.
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
+        self._issue_share_token(slug)
         if (game and self.cfg.output.auto_playlist_by_game
                 and self.playlists.record_auto(game, slug)):
             asyncio.create_task(self._broadcast_playlists())
@@ -1008,7 +1066,77 @@ class ShareServer:
             "clip": self._clip_json(slug, path, {}),
         }))
         asyncio.create_task(self._broadcast_clip(slug, path))
-        return f"{self.public_base_url()}/c/{quote(slug, safe='')}"
+        return self.share_url(slug)
+
+    # ── share tokens ──────────────────────────────────────────────────────────
+
+    def _new_share_token(self) -> str:
+        token = secrets.token_urlsafe(9)
+        while token in self._share_slugs:
+            token = secrets.token_urlsafe(9)
+        return token
+
+    def _ensure_share_tokens(self) -> None:
+        """Give every clip in the library a token, in one write.
+
+        Tokens for clips that are missing are kept, not pruned: a clips folder
+        on a drive that is not mounted yet would otherwise lose every link.
+        A recording that reuses a clip number gets a fresh token in add_clip,
+        which is the case that matters.
+        """
+        missing = [slug for slug in self._clips if slug not in self._share_tokens]
+        for slug in missing:
+            token = self._new_share_token()
+            self._share_tokens[slug] = token
+            self._share_slugs[token] = slug
+        if missing:
+            _save_share_tokens(self._share_tokens)
+
+    def _issue_share_token(self, slug: str) -> str:
+        """Give *slug* a new token, retiring any link it had before."""
+        old = self._share_tokens.get(slug)
+        if old is not None:
+            self._share_slugs.pop(old, None)
+        token = self._new_share_token()
+        self._share_tokens[slug] = token
+        self._share_slugs[token] = slug
+        _save_share_tokens(self._share_tokens)
+        return token
+
+    def _move_share_token(self, slug: str, new_slug: str) -> None:
+        """Keep a shared link working when its clip is renamed."""
+        token = self._share_tokens.pop(slug, None)
+        if token is None:
+            return
+        stale = self._share_tokens.get(new_slug)
+        if stale is not None:
+            self._share_slugs.pop(stale, None)
+        self._share_tokens[new_slug] = token
+        self._share_slugs[token] = new_slug
+        _save_share_tokens(self._share_tokens)
+
+    def _forget_share_token(self, slug: str) -> None:
+        token = self._share_tokens.pop(slug, None)
+        if token is not None:
+            self._share_slugs.pop(token, None)
+            _save_share_tokens(self._share_tokens)
+
+    def share_url(self, slug: str) -> str:
+        base = self.public_base_url() or self.local_base_url() or ""
+        token = self._share_tokens.get(slug) or self._issue_share_token(slug)
+        return f"{base}/c/{token}"
+
+    def _slug_for_ref(self, ref: str, *, allow_slug: bool) -> Optional[str]:
+        """The clip a URL segment names, or None.
+
+        The public server resolves tokens only. The local server keeps
+        accepting slugs, which is what the app itself uses, and also takes
+        tokens so a share link that fell back to the local address still
+        opens on this machine.
+        """
+        if allow_slug and ref in self._clips:
+            return ref
+        return self._share_slugs.get(ref)
 
     def local_base_url(self) -> Optional[str]:
         return self._local_base_url
@@ -1022,6 +1150,17 @@ class ShareServer:
         """Whether share links work outside the local network. False means we
         fell back to a LAN address because there is no tunnel (#105)."""
         return bool(self.cfg.sharing.base_url or self._tunnel_url)
+
+    def _share_links_update(self) -> dict:
+        return {
+            "type": "share_links_changed",
+            "links": {slug: self.share_url(slug) for slug in self._clips},
+            "share_is_public": self.public_is_reachable(),
+        }
+
+    async def _broadcast_share_links(self) -> None:
+        if self._clips:
+            await self.broadcast(self._share_links_update())
 
     async def broadcast(self, msg: dict) -> None:
         if not self._ws_clients:
@@ -1055,7 +1194,6 @@ class ShareServer:
         return self._meta[slug]
 
     def _clip_json(self, slug: str, path: Path, meta: dict) -> dict:
-        public_base = self.public_base_url() or self.local_base_url() or ""
         try:
             st = path.stat()
             size = st.st_size
@@ -1090,7 +1228,7 @@ class ShareServer:
             "unreadable_reason": meta.get("unreadable_reason", ""),
             # Keep share links public, but serve media via local relative URLs
             # so the app UI never fetches video through an external tunnel.
-            "share_url":  f"{public_base}/c/{enc}",
+            "share_url":  self.share_url(slug),
             "share_is_public": self.public_is_reachable(),
             # Cache-bust media URLs by clip file identity: deleted clip numbers
             # get reused (Vice_Clip_5 can name a brand-new file), and a trim
@@ -1231,10 +1369,21 @@ class ShareServer:
         )
 
     async def _embed_page(self, req: web.Request) -> web.Response:
-        slug = req.match_info["slug"]
-        path = self._clips.get(slug)
+        return await self._serve_embed_page(req, public=False)
+
+    async def _public_embed_page(self, req: web.Request) -> web.Response:
+        return await self._serve_embed_page(req, public=True)
+
+    def _clip_for_ref(self, ref: str, *, public: bool) -> tuple[str, Path]:
+        slug = self._slug_for_ref(ref, allow_slug=not public)
+        path = self._clips.get(slug) if slug else None
         if not path or not path.exists():
             raise web.HTTPNotFound()
+        return slug, path
+
+    async def _serve_embed_page(self, req: web.Request, *, public: bool) -> web.Response:
+        ref = req.match_info["ref"]
+        slug, path = self._clip_for_ref(ref, public=public)
         meta = await self._get_meta(slug, path)
         # cloudflared terminates TLS and forwards plain HTTP, so req.scheme
         # is "http" even when the visitor came in over https. Discord and
@@ -1245,7 +1394,9 @@ class ShareServer:
         # Direct file URL with the real container suffix; some unfurlers
         # sniff the extension. _video strips it back off.
         suffix = path.suffix.lower() or ".mp4"
-        enc = quote(slug, safe="")
+        # The media links reuse whatever named the page, so a page reached by
+        # token never hands out the filename that would lead to other clips.
+        enc = quote(ref, safe="")
         page = _EMBED_PAGE.format(
             title=html.escape(f"Vice clip, {slug}", quote=True),
             page_url=f"{base}/c/{enc}",
@@ -1266,20 +1417,28 @@ class ShareServer:
         return "#0099ff"
 
     async def _video(self, req: web.Request) -> web.Response:
-        slug = req.match_info["slug"]
-        path = self._clips.get(slug)
-        if path is None and slug.lower().endswith((".mp4", ".mkv")):
+        return await self._serve_video(req, public=False)
+
+    async def _public_video(self, req: web.Request) -> web.Response:
+        return await self._serve_video(req, public=True)
+
+    async def _serve_video(self, req: web.Request, *, public: bool) -> web.Response:
+        ref = req.match_info["ref"]
+        slug = self._slug_for_ref(ref, allow_slug=not public)
+        if slug is None and ref.lower().endswith((".mp4", ".mkv")):
             # Embed pages link the file with its container suffix. Exact
             # match first so slugs that themselves contain dots keep working.
-            path = self._clips.get(slug.rsplit(".", 1)[0])
+            slug = self._slug_for_ref(ref.rsplit(".", 1)[0], allow_slug=not public)
+        path = self._clips.get(slug) if slug else None
         if not path or not path.exists():
             raise web.HTTPNotFound()
 
         # The UI asks for proxy=1 when the clip's codec (H.265) can't play in
         # the native WebEngine. Serve a cached H.264 copy instead; the original
         # is never touched. Falls through to the source if it's already
-        # web-playable or the transcode fails.
-        if req.query.get("proxy") == "1":
+        # web-playable or the transcode fails. Local only: over a share link
+        # it would let a stranger make this machine transcode on request.
+        if not public and req.query.get("proxy") == "1":
             served = await self._serve_preview_proxy(slug, path)
             if served is not None:
                 return served
@@ -1354,10 +1513,13 @@ class ShareServer:
         })
 
     async def _thumb(self, req: web.Request) -> web.Response:
-        slug = req.match_info["slug"]
-        path = self._clips.get(slug)
-        if not path or not path.exists():
-            raise web.HTTPNotFound()
+        return await self._serve_thumb(req, public=False)
+
+    async def _public_thumb(self, req: web.Request) -> web.Response:
+        return await self._serve_thumb(req, public=True)
+
+    async def _serve_thumb(self, req: web.Request, *, public: bool) -> web.Response:
+        slug, path = self._clip_for_ref(req.match_info["ref"], public=public)
         meta = await self._get_meta(slug, path)
         t = await _make_thumb(path, duration=meta.get("duration", 0))
         if not t.exists() or t.stat().st_size == 0:
@@ -1411,6 +1573,7 @@ class ShareServer:
         self._meta.pop(slug, None)
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
+        self._forget_share_token(slug)
         if self.playlists.on_clip_deleted(slug):
             await self._broadcast_playlists()
         if self.editor_project.on_clip_deleted(slug):
@@ -1557,6 +1720,7 @@ class ShareServer:
         if slug in self._views:
             self._views[new_slug] = self._views.pop(slug)
             _save_views(self._views)
+        self._move_share_token(slug, new_slug)
 
         # Tell the UI: old card gone, new card appears
         await self.broadcast({"type": "clip_deleted", "slug": slug})
@@ -2385,40 +2549,96 @@ class ShareServer:
             )
             return
         log.info("Starting Cloudflare Tunnel on port %d", port)
-        try:
-            self._tunnel_proc = await asyncio.create_subprocess_exec(
-                "cloudflared", "tunnel", "--url", f"http://localhost:{port}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-        except OSError as exc:
-            await self._tunnel_failed(f"cloudflared failed to start: {exc}")
+        if self._tunnel_task and not self._tunnel_task.done():
             return
-        asyncio.create_task(self._read_cloudflare_url())
+        self._tunnel_stopping = False
+        self._tunnel_task = asyncio.create_task(self._run_tunnel(port))
+
+    async def _run_tunnel(self, port: int) -> None:
+        delay = _TUNNEL_RETRY_INITIAL
+        while not self._tunnel_stopping:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "cloudflared", "tunnel", "--url", f"http://localhost:{port}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+            except OSError as exc:
+                await self._tunnel_failed(f"cloudflared failed to start: {exc}")
+                connected = False
+            else:
+                self._tunnel_proc = proc
+                try:
+                    _, connected = await self._read_cloudflare_url(proc)
+                except asyncio.CancelledError:
+                    await self._stop_tunnel_process(proc)
+                    raise
+                finally:
+                    if self._tunnel_proc is proc:
+                        self._tunnel_proc = None
+
+            if self._tunnel_stopping:
+                return
+            if connected:
+                delay = _TUNNEL_RETRY_INITIAL
+            log.warning("Retrying Cloudflare Tunnel in %.0f seconds", delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _TUNNEL_RETRY_MAX)
+
+    @staticmethod
+    async def _stop_tunnel_process(proc: asyncio.subprocess.Process) -> None:
+        if proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except ProcessLookupError:
+            return
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                return
+            await proc.wait()
 
     async def _tunnel_failed(self, reason: str) -> None:
         log.error("Public share tunnel unavailable: %s", reason)
         self._tunnel_url = None
         await self.broadcast({"type": "tunnel_error", "error": reason})
+        await self._broadcast_share_links()
 
-    async def _read_cloudflare_url(self) -> None:
-        assert self._tunnel_proc and self._tunnel_proc.stdout
-        proc = self._tunnel_proc
+    async def _read_cloudflare_url(
+        self, proc: Optional[asyncio.subprocess.Process] = None,
+    ) -> tuple[str, bool]:
+        proc = proc or self._tunnel_proc
+        assert proc and proc.stdout
+        diagnostics: list[str] = []
+        connected = False
         async for raw in proc.stdout:
+            line = raw.decode(errors="replace").strip()
             # Keep draining stdout after the URL so process exit is still
             # detected.
-            if self._tunnel_url is not None:
-                continue
-            url = _quick_tunnel_url(raw.decode(errors="replace"))
+            url = _quick_tunnel_url(line) if self._tunnel_url is None else None
             if url:
                 self._tunnel_url = url
+                connected = True
                 log.info("Cloudflare Tunnel URL: %s", self._tunnel_url)
                 await self.broadcast({"type": "tunnel_url", "url": self._tunnel_url})
-        # stdout closed: cloudflared exited. If that happened before a URL
-        # was ever printed, surface it instead of leaving the UI waiting.
-        if self._tunnel_url is None and proc is self._tunnel_proc:
-            rc = proc.returncode if proc.returncode is not None else await proc.wait()
-            await self._tunnel_failed(
-                f"cloudflared exited (code {rc}) before providing a tunnel URL. "
-                "Check your network or run it manually to see the error."
-            )
+                await self._broadcast_share_links()
+            if not url and line and any(
+                marker in line.lower() for marker in ("err", "error", "failed", "unable")
+            ):
+                diagnostics.append(line[-600:])
+                diagnostics = diagnostics[-20:]
+
+        rc = proc.returncode if proc.returncode is not None else await proc.wait()
+        if connected:
+            reason = f"cloudflared exited (code {rc}) after providing a tunnel URL"
+        else:
+            reason = f"cloudflared exited (code {rc}) before providing a tunnel URL"
+        detail = _cloudflared_failure_detail(diagnostics)
+        if detail:
+            reason += f": {detail}"
+        if proc is self._tunnel_proc:
+            await self._tunnel_failed(reason)
+        return reason, connected
