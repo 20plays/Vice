@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -13,10 +14,25 @@ from vice.config import Config, HotkeyConfig, OutputConfig, RecordingConfig, Sha
 
 try:
     from aiohttp import ClientSession
+    import vice.share as _share
     from vice.share import ShareServer
 except ModuleNotFoundError:
     ClientSession = None
     ShareServer = None
+else:
+    # ShareServer issues share tokens as soon as it lists a clip. Send them to a
+    # scratch file for the whole run, or these tests write into the real home.
+    _SHARE_TOKENS = tempfile.TemporaryDirectory()
+    _share.SHARE_TOKENS_PATH = Path(_SHARE_TOKENS.name) / "share_tokens.json"
+
+
+_TOKEN = re.compile(r"[A-Za-z0-9_-]{12}")
+
+
+def _share_token(server, slug: str) -> str:
+    """The token in a clip's public link, which is how the public server
+    names a clip now that filenames are not accepted there (#222)."""
+    return server.share_url(slug).rsplit("/c/", 1)[1]
 
 
 def _free_port() -> int:
@@ -112,10 +128,10 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(resp.status, 200)
             payload = await resp.json()
         self.assertEqual(payload["clips"][0]["slug"], "test_clip")
-        self.assertEqual(
-            payload["clips"][0]["share_url"],
-            f"http://127.0.0.1:{self.public_port}/c/test_clip",
-        )
+        share_url = payload["clips"][0]["share_url"]
+        prefix = f"http://127.0.0.1:{self.public_port}/c/"
+        self.assertTrue(share_url.startswith(prefix), share_url)
+        self.assertRegex(share_url[len(prefix):], _TOKEN)
 
         async with self.client.get(f"{local_base}/api/status") as resp:
             self.assertEqual(resp.status, 200)
@@ -146,17 +162,18 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_server_only_serves_share_routes(self) -> None:
         public_base = f"http://127.0.0.1:{self.public_port}"
+        token = _share_token(self.server, "test_clip")
 
-        async with self.client.get(f"{public_base}/c/test_clip") as resp:
+        async with self.client.get(f"{public_base}/c/{token}") as resp:
             self.assertEqual(resp.status, 200)
             html = await resp.text()
-        self.assertIn(f"{public_base}/v/test_clip", html)
+        self.assertIn(f"{public_base}/v/{token}", html)
 
-        async with self.client.get(f"{public_base}/v/test_clip") as resp:
+        async with self.client.get(f"{public_base}/v/{token}") as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Content-Type"), "video/mp4")
 
-        async with self.client.get(f"{public_base}/t/test_clip") as resp:
+        async with self.client.get(f"{public_base}/t/{token}") as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Content-Type"), "image/jpeg")
 
@@ -175,7 +192,8 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
         )
 
         public_base = f"http://127.0.0.1:{self.public_port}"
-        async with self.client.get(f"{public_base}/v/test_clip") as resp:
+        token = _share_token(self.server, "test_clip")
+        async with self.client.get(f"{public_base}/v/{token}") as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Cache-Control"), "no-cache")
 
@@ -193,7 +211,8 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
         # The Content-Type must match the actual container: claiming
         # video/mp4 for Matroska confuses the browser's codec detection.
         public_base = f"http://127.0.0.1:{self.public_port}"
-        async with self.client.get(f"{public_base}/v/mkv_clip") as resp:
+        token = _share_token(self.server, "mkv_clip")
+        async with self.client.get(f"{public_base}/v/{token}") as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Content-Type"), "video/x-matroska")
 
@@ -222,29 +241,31 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_embed_page_carries_theme_color_and_video_metadata(self) -> None:
         public_base = self.server.public_base_url()
-        async with self.client.get(f"{public_base}/c/test_clip") as resp:
+        token = _share_token(self.server, "test_clip")
+        async with self.client.get(f"{public_base}/c/{token}") as resp:
             self.assertEqual(resp.status, 200)
             html = await resp.text()
 
         self.assertIn('name="theme-color"', html)
         self.assertIn('content="#0099ff"', html)
-        self.assertIn(f'property="og:url"               content="{public_base}/c/test_clip"', html)
-        self.assertIn(f'content="{public_base}/v/test_clip.mp4"', html)
+        self.assertIn(f'property="og:url"               content="{public_base}/c/{token}"', html)
+        self.assertIn(f'content="{public_base}/v/{token}.mp4"', html)
         self.assertIn('property="og:video:type"        content="video/mp4"', html)
         self.assertIn('<meta name="twitter:card"             content="player">', html)
         self.assertIn(
-            f'<meta name="twitter:player"           content="{public_base}/v/test_clip.mp4">',
+            f'<meta name="twitter:player"           content="{public_base}/v/{token}.mp4">',
             html,
         )
         self.assertIn(
-            f'<meta name="twitter:image"            content="{public_base}/t/test_clip">',
+            f'<meta name="twitter:image"            content="{public_base}/t/{token}">',
             html,
         )
 
     async def test_video_route_accepts_container_suffix(self) -> None:
-        # Embed pages link /v/<slug>.mp4 so unfurlers see a file extension.
+        # Embed pages link /v/<token>.mp4 so unfurlers see a file extension.
         public_base = self.server.public_base_url()
-        async with self.client.get(f"{public_base}/v/test_clip.mp4") as resp:
+        token = _share_token(self.server, "test_clip")
+        async with self.client.get(f"{public_base}/v/{token}.mp4") as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Content-Type"), "video/mp4")
 
@@ -256,23 +277,25 @@ class ShareServerSecurityTests(unittest.IsolatedAsyncioTestCase):
         # by cloudflared; embed URLs must use the visitor's scheme or
         # Discord rejects the video (issue #100).
         public_base = self.server.public_base_url()
+        token = _share_token(self.server, "test_clip")
         headers = {"X-Forwarded-Proto": "https", "Host": "clip.trycloudflare.com"}
-        async with self.client.get(f"{public_base}/c/test_clip", headers=headers) as resp:
+        async with self.client.get(f"{public_base}/c/{token}", headers=headers) as resp:
             self.assertEqual(resp.status, 200)
             html = await resp.text()
 
-        self.assertIn('content="https://clip.trycloudflare.com/v/test_clip.mp4"', html)
+        self.assertIn(f'content="https://clip.trycloudflare.com/v/{token}.mp4"', html)
         self.assertNotIn("http://clip.trycloudflare.com", html)
 
         # Plain LAN requests keep working without the header.
-        async with self.client.get(f"{public_base}/c/test_clip") as resp:
+        async with self.client.get(f"{public_base}/c/{token}") as resp:
             html = await resp.text()
-        self.assertIn(f'content="{public_base}/v/test_clip.mp4"', html)
+        self.assertIn(f'content="{public_base}/v/{token}.mp4"', html)
 
     async def test_embed_color_rejects_non_hex_values(self) -> None:
         self.server.cfg.sharing.embed_color = "<script>alert(1)</script>"
         public_base = self.server.public_base_url()
-        async with self.client.get(f"{public_base}/c/test_clip") as resp:
+        token = _share_token(self.server, "test_clip")
+        async with self.client.get(f"{public_base}/c/{token}") as resp:
             html = await resp.text()
 
         self.assertNotIn("<script>alert(1)</script>", html)
@@ -562,7 +585,9 @@ class PlaylistApiTests(unittest.IsolatedAsyncioTestCase):
             if url:
                 self.assertNotIn(" ", url, key)
                 self.assertNotIn("'", url, key)
-        self.assertIn("Bob%27s%20clip", clip["share_url"])
+        # The share link names the clip by token, so the filename is not in it
+        # at all; the app's own media URLs still carry the encoded slug.
+        self.assertNotIn("Bob", clip["share_url"])
         self.assertIn("Bob%27s%20clip", clip["video_url"])
 
         # The embed page the share link points at has to render, and its
@@ -1279,21 +1304,29 @@ class ShareServerLegacyUrlCompatibilityTests(unittest.IsolatedAsyncioTestCase):
         await self.client.close()
         await self.server.stop()
 
-    async def test_legacy_pre_v1_0_12_share_urls_still_resolve(self) -> None:
+    async def test_legacy_listener_serves_share_links_by_token_only(self) -> None:
+        # Links from before 1.0.12 named clips by filename on this listener.
+        # They stop working with #222, on purpose: a filename there was all it
+        # took to walk the whole library from the LAN.
         legacy_base = f"http://127.0.0.2:{self.local_port}"
+        token = _share_token(self.server, "legacy_clip")
 
-        async with self.client.get(f"{legacy_base}/c/legacy_clip") as resp:
+        async with self.client.get(f"{legacy_base}/c/{token}") as resp:
             self.assertEqual(resp.status, 200)
             html = await resp.text()
-        self.assertIn(f"{legacy_base}/v/legacy_clip", html)
+        self.assertIn(f"{legacy_base}/v/{token}", html)
 
-        async with self.client.get(f"{legacy_base}/v/legacy_clip") as resp:
+        async with self.client.get(f"{legacy_base}/v/{token}") as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Content-Type"), "video/mp4")
 
-        async with self.client.get(f"{legacy_base}/t/legacy_clip") as resp:
+        async with self.client.get(f"{legacy_base}/t/{token}") as resp:
             self.assertEqual(resp.status, 200)
             self.assertEqual(resp.headers.get("Content-Type"), "image/jpeg")
+
+        for kind in ("c", "v", "t"):
+            async with self.client.get(f"{legacy_base}/{kind}/legacy_clip") as resp:
+                self.assertEqual(resp.status, 404, kind)
 
     async def test_legacy_origin_still_blocks_ui_and_api_routes(self) -> None:
         legacy_base = f"http://127.0.0.2:{self.local_port}"
@@ -1989,7 +2022,8 @@ class ShareServerTunnelTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(
                 link_update["links"],
-                {"Clip with space": "https://retry-worked.trycloudflare.com/c/Clip%20with%20space"},
+                {"Clip with space": "https://retry-worked.trycloudflare.com/c/"
+                                    + _share_token(server, "Clip with space")},
             )
             self.assertTrue(link_update["share_is_public"])
             task = server._tunnel_task
@@ -2011,7 +2045,7 @@ class ShareServerTunnelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(messages[1]["type"], "share_links_changed")
         self.assertEqual(
             messages[1]["links"],
-            {"clip": "http://192.168.1.20:8766/c/clip"},
+            {"clip": "http://192.168.1.20:8766/c/" + _share_token(server, "clip")},
         )
         self.assertFalse(messages[1]["share_is_public"])
 
@@ -2265,3 +2299,156 @@ class ImageApiTests(unittest.IsolatedAsyncioTestCase):
         auto = [p for p in self.server.playlists.list_playlists() if p["kind"] == "auto"]
         self.assertEqual(len(auto), 1)
         self.assertIn("img:Vice_Shot_1", auto[0]["clip_slugs"])
+
+
+@unittest.skipUnless(ShareServer is not None and ClientSession is not None, "aiohttp is not installed")
+class ShareTokenTests(unittest.IsolatedAsyncioTestCase):
+    """Public links name a clip by an unguessable token (#222, #213)."""
+
+    async def asyncSetUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        root = Path(self.tmpdir.name)
+        self.output_dir = root / "clips"
+        self.output_dir.mkdir()
+        thumb_dir = root / "thumbs"
+        thumb_dir.mkdir()
+        self.thumb = thumb_dir / "thumb.jpg"
+        self.thumb.write_bytes(b"jpeg")
+        self.tokens_path = root / "share_tokens.json"
+
+        for number in (1, 2, 3):
+            (self.output_dir / f"Vice_Clip_{number}.mp4").write_bytes(b"not-a-real-mp4")
+
+        async def _stub_make_thumb(_: Path, duration: float = 0.0) -> Path:
+            return self.thumb
+
+        for patcher in (
+            mock.patch("vice.share._local_ip", return_value="127.0.0.1"),
+            mock.patch("vice.share.THUMB_DIR", thumb_dir),
+            mock.patch("vice.share.HIGHLIGHTS_DIR", root / "highlights"),
+            mock.patch("vice.share.PROXY_DIR", root / "proxies"),
+            mock.patch("vice.playlists.PLAYLISTS_PATH", root / "playlists.json"),
+            mock.patch("vice.share.VIEWS_PATH", root / "views.json"),
+            mock.patch("vice.share.SHARE_TOKENS_PATH", self.tokens_path),
+            mock.patch("vice.share._ffprobe", new=_stub_ffprobe),
+            mock.patch("vice.share._make_thumb", new=_stub_make_thumb),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        self.local_port = _free_port()
+        self.public_port = _free_port()
+        while self.public_port == self.local_port:
+            self.public_port = _free_port()
+        self.cfg = Config(
+            output=OutputConfig(directory=str(self.output_dir)),
+            sharing=SharingConfig(
+                port=self.local_port,
+                public_port=self.public_port,
+                cloudflare_tunnel=False,
+            ),
+        )
+        self.server = await self._start_server()
+        self.client = ClientSession()
+        self.addAsyncCleanup(self.client.close)
+        self.public = f"http://127.0.0.1:{self.public_port}"
+        self.local = f"http://127.0.0.1:{self.local_port}"
+
+    async def _start_server(self):
+        server = ShareServer(self.cfg)
+        server.get_status_cb = lambda: {"recording": True, "backend": "test"}
+        await server.start()
+        self.addAsyncCleanup(server.stop)
+        return server
+
+    async def _status(self, path: str) -> int:
+        async with self.client.get(path) as resp:
+            return resp.status
+
+    async def test_every_clip_gets_a_distinct_unguessable_token_at_startup(self) -> None:
+        tokens = {slug: _share_token(self.server, slug) for slug in self.server._clips}
+        self.assertEqual(set(tokens), {"Vice_Clip_1", "Vice_Clip_2", "Vice_Clip_3"})
+        self.assertEqual(len(set(tokens.values())), 3)
+        for token in tokens.values():
+            self.assertRegex(token, _TOKEN)
+        # Issued at startup and written once, not on first listing.
+        self.assertEqual(json.loads(self.tokens_path.read_text()), tokens)
+
+    async def test_the_public_server_refuses_filenames(self) -> None:
+        # Editing the number in a link was the whole of #222.
+        for kind in ("c", "v", "t"):
+            self.assertEqual(await self._status(f"{self.public}/{kind}/Vice_Clip_2"), 404, kind)
+        self.assertEqual(await self._status(f"{self.public}/v/Vice_Clip_2.mp4"), 404)
+
+    async def test_the_public_server_refuses_unknown_tokens(self) -> None:
+        self.assertEqual(await self._status(f"{self.public}/c/AAAAAAAAAAAA"), 404)
+
+    async def test_an_embed_page_reached_by_token_links_its_media_by_token(self) -> None:
+        token = _share_token(self.server, "Vice_Clip_2")
+        async with self.client.get(f"{self.public}/c/{token}") as resp:
+            self.assertEqual(resp.status, 200)
+            page = await resp.text()
+        for kind in ("c", "v", "t"):
+            self.assertIn(f"{self.public}/{kind}/{token}", page)
+            # The title may name the shared clip itself; no URL may, or it
+            # would hand out the pattern that leads to the other clips.
+            self.assertNotIn(f"/{kind}/Vice_Clip", page)
+
+    async def test_the_app_keeps_addressing_clips_by_slug_locally(self) -> None:
+        for kind in ("c", "v", "t"):
+            self.assertEqual(await self._status(f"{self.local}/{kind}/Vice_Clip_1"), 200, kind)
+
+    async def test_a_link_that_fell_back_to_the_local_address_still_opens_here(self) -> None:
+        token = _share_token(self.server, "Vice_Clip_1")
+        self.assertEqual(await self._status(f"{self.local}/c/{token}"), 200)
+
+    async def test_tokens_survive_a_restart(self) -> None:
+        before = _share_token(self.server, "Vice_Clip_3")
+        await self.server.stop()
+        restarted = await self._start_server()
+        self.assertEqual(_share_token(restarted, "Vice_Clip_3"), before)
+
+    async def test_a_renamed_clip_keeps_its_link(self) -> None:
+        token = _share_token(self.server, "Vice_Clip_1")
+        async with self.client.post(
+            f"{self.local}/api/clips/Vice_Clip_1/rename", json={"name": "clutch round"},
+        ) as resp:
+            self.assertTrue((await resp.json()).get("ok"))
+        self.assertEqual(await self._status(f"{self.public}/v/{token}"), 200)
+        self.assertEqual(self.server._share_slugs[token], "clutch-round")
+
+    async def test_a_deleted_clip_takes_its_link_with_it(self) -> None:
+        token = _share_token(self.server, "Vice_Clip_2")
+        async with self.client.delete(f"{self.local}/api/clips/Vice_Clip_2") as resp:
+            self.assertEqual(resp.status, 200)
+        self.assertEqual(await self._status(f"{self.public}/c/{token}"), 404)
+        self.assertNotIn("Vice_Clip_2", json.loads(self.tokens_path.read_text()))
+
+    async def test_a_new_recording_under_a_reused_number_gets_a_fresh_link(self) -> None:
+        # Whoever still holds the old link must not be shown the new clip,
+        # which is also what kept Discord playing a stale Clip_2 (#213).
+        old = _share_token(self.server, "Vice_Clip_3")
+        self.server.add_clip(self.output_dir / "Vice_Clip_3.mp4")
+        await asyncio.sleep(0)
+        self.assertNotEqual(_share_token(self.server, "Vice_Clip_3"), old)
+        self.assertEqual(await self._status(f"{self.public}/c/{old}"), 404)
+
+    async def test_the_token_file_is_readable_by_its_owner_only(self) -> None:
+        self.assertEqual(self.tokens_path.stat().st_mode & 0o777, 0o600)
+
+    async def test_an_unreadable_token_file_fails_closed(self) -> None:
+        old = _share_token(self.server, "Vice_Clip_1")
+        await self.server.stop()
+        self.tokens_path.write_text("{not json")
+        with self.assertLogs("vice.share", level="WARNING"):
+            restarted = await self._start_server()
+        fresh = _share_token(restarted, "Vice_Clip_1")
+        self.assertNotEqual(fresh, old)
+        self.assertRegex(fresh, _TOKEN)
+
+    async def test_a_share_link_cannot_ask_for_a_transcode(self) -> None:
+        token = _share_token(self.server, "Vice_Clip_1")
+        with mock.patch.object(self.server, "_serve_preview_proxy") as proxy:
+            self.assertEqual(await self._status(f"{self.public}/v/{token}?proxy=1"), 200)
+        proxy.assert_not_called()

@@ -56,6 +56,11 @@ from vice.runtime import (
     normalize_runtime_environment,
 )
 
+# ShareServer issues share tokens as soon as it lists a clip. Send them to a
+# scratch file for the whole run, or these tests write into the real home.
+_SHARE_TOKENS = tempfile.TemporaryDirectory()
+share_mod.SHARE_TOKENS_PATH = Path(_SHARE_TOKENS.name) / "share_tokens.json"
+
 try:
     from vice.share import ShareServer
 except ModuleNotFoundError:
