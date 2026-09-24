@@ -1879,19 +1879,29 @@ async def _trim_to_last_n_seconds(path: Path, seconds: int) -> Path:
         except asyncio.TimeoutError:
             return False, "trim command timed out"
 
+    # ffmpeg exiting cleanly is not proof the trim worked. A file whose frames
+    # all share one timestamp trims "successfully" to a single frame, and this
+    # replaces the recording in place, so the result has to be checked first
+    # (#154). Half the expected length is well clear of keyframe rounding.
+    async def _trim_problem() -> Optional[str]:
+        if not tmp.exists():
+            return "it wrote no file"
+        got = await _get_duration(tmp)
+        if got < seconds / 2:
+            return f"the result is {got:.2f}s long instead of {seconds}s"
+        return None
+
     ok, err = await _run_trim(_copy_trim_cmd(), 60)
-    if not ok:
-        log.warning("ffmpeg copy trim failed, retrying with re-encode: %s", err)
+    problem = await _trim_problem() if ok else err
+    if problem:
+        log.warning("ffmpeg copy trim failed, retrying with re-encode: %s", problem)
         ok, err = await _run_trim(_reencode_trim_cmd(), 120)
-        if not ok:
-            log.error("ffmpeg trim failed: %s", err)
+        problem = await _trim_problem() if ok else err
+        if problem:
+            log.error("Could not trim %s, keeping the whole clip: %s", path.name, problem)
+            tmp.unlink(missing_ok=True)
             return path
 
-    if not tmp.exists():
-        log.error("ffmpeg trim did not produce output file")
-        return path
-
-    # Replace original with trimmed version
     tmp.replace(path)
     return path
 
@@ -2321,15 +2331,17 @@ class GSRRecorder(Recorder):
                     # read. Without it the reporter and I both get nothing
                     # more than "clip save failed" (#154).
                     _, why = await probe_media_detailed(newest)
+                    # An empty reason means ffprobe read the file and simply
+                    # found no duration, which is not the same as corrupt.
+                    why = why or "it reads, but reports no duration"
                     self.last_clip_error = (
-                        f"{newest.name} was written but cannot be read"
-                        + (f": {why}" if why else ".")
-                        + " The file is still there, nothing was deleted."
+                        f"{newest.name} was written but cannot be read: {why}."
+                        " The file is still there, nothing was deleted."
                     )
                     log.error(
                         "GSR clip %s stopped being written but is unreadable (%s). "
                         "Leaving the file in place for inspection.",
-                        newest, why or "no reason from ffprobe",
+                        newest, why,
                     )
                     return None
                 # Rename GSR's auto-generated filename to a sequential

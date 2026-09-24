@@ -122,6 +122,23 @@ async def probe_media_detailed(path: Path) -> tuple[Optional[dict], str]:
         # when both values are present and the rate is sane. We keep the
         # zero-duration result for files that do not provide enough evidence.
         duration = _duration_from_video_samples(video)
+        # The sample count is only evidence if the frames can be read. A file
+        # gpu-screen-recorder 5.13.3 wrote as MP4 on Debian 13 stamps every
+        # frame at zero, and FFmpeg's MP4 reader keeps one frame per
+        # timestamp, so it reads 1 of 3655. Estimating 60 seconds from the
+        # index let that file through to the trim, which replaced the
+        # recording with a single frame (#154).
+        # A positive estimate means nb_frames already parsed as a count.
+        frames = int(video["nb_frames"]) if duration > 0 else 0
+        if frames > 1:
+            readable = await _readable_video_packets(path)
+            if readable is not None and readable * 2 < frames:
+                reason = (
+                    f"every frame is stamped at the same time, so only "
+                    f"{readable} of its {frames} frames can be read"
+                )
+                log.warning("Could not read %s: %s", path.name, reason)
+                return None, reason
     audio = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
     audio_tracks = []
     for index, stream in enumerate(audio):
@@ -193,6 +210,26 @@ def _duration_from_video_samples(stream: dict) -> float:
             if math.isfinite(estimate) and estimate > 0:
                 return estimate
     return 0.0
+
+
+async def _readable_video_packets(path: Path) -> Optional[int]:
+    """How many video packets FFmpeg can actually read, or None if unknown.
+
+    Demuxes without decoding, so it costs a read of the file. None means no
+    opinion, and callers must then behave exactly as they did without it.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-count_packets", "-select_streams", "v:0",
+            "-show_entries", "stream=nb_read_packets", "-of", "csv=p=0", str(path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await communicate_with_timeout(proc, timeout=30)
+        return int(stdout.decode().strip().split(",")[0])
+    except Exception as exc:
+        log.debug("Could not count packets in %s: %s", path.name, exc)
+        return None
 
 
 async def get_duration(path: Path) -> float:

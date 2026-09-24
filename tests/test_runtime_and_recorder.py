@@ -19,6 +19,7 @@ from vice import audio as audio_mod
 from vice import config as config_mod
 from vice import main as main_mod
 from vice import media as media_mod
+from vice import recorder as recorder_mod
 from vice import share as share_mod
 from vice.main import _RECORDER_DEATH_BACKOFF_AFTER
 from vice.config import Config, HotkeyClipPreset, HotkeyConfig, OutputConfig, RecordingConfig, SharingConfig
@@ -1046,7 +1047,7 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(ready)
 
     async def test_trim_copy_command_avoids_negative_timestamps(self) -> None:
-        captured: dict = {}
+        commands: list = []
 
         async def _fake_duration(_: Path) -> float:
             return 100.0
@@ -1058,7 +1059,7 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
                 return b"", b""
 
         async def _fake_exec(*cmd, **_kwargs):
-            captured["cmd"] = list(cmd)
+            commands.append(list(cmd))
             return _Proc()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1072,7 +1073,8 @@ class RecorderStabilizationTests(unittest.IsolatedAsyncioTestCase):
 
                     await _trim_to_last_n_seconds(clip, 30)
 
-        cmd = captured["cmd"]
+        # The copy trim runs first; a re-encode only follows if it fails.
+        cmd = commands[0]
         self.assertIn("-avoid_negative_ts", cmd)
         self.assertEqual(cmd[cmd.index("-avoid_negative_ts") + 1], "make_zero")
         self.assertIn("copy", cmd)
@@ -3317,7 +3319,10 @@ class ProbeFailureReasonTests(unittest.IsolatedAsyncioTestCase):
             0.0,
         )
 
-    async def test_probe_uses_samples_when_mp4_duration_fields_are_zero(self) -> None:
+    @staticmethod
+    def _zero_duration_probe(frames: int, readable) -> mock.AsyncMock:
+        """ffprobe as it answers for an MP4 whose duration fields are zero:
+        first the metadata, then the packet count, or a failed count."""
         payload = {
             "format": {"duration": "N/A"},
             "streams": [{
@@ -3326,23 +3331,76 @@ class ProbeFailureReasonTests(unittest.IsolatedAsyncioTestCase):
                 "height": 1080,
                 "codec_name": "h264",
                 "duration": "0",
-                "nb_frames": "3641",
+                "nb_frames": str(frames),
                 "avg_frame_rate": "728200000/12136677",
             }],
         }
-        process = mock.Mock(returncode=0)
-        process.communicate = mock.AsyncMock(
-            return_value=(json.dumps(payload).encode(), b"")
-        )
-        with mock.patch.object(
-            media_mod.asyncio,
-            "create_subprocess_exec",
-            new=mock.AsyncMock(return_value=process),
-        ):
+
+        def answer(stdout: bytes) -> mock.Mock:
+            process = mock.Mock(returncode=0)
+            process.communicate = mock.AsyncMock(return_value=(stdout, b""))
+            return process
+
+        count = answer(f"{readable}\n".encode()) if readable is not None else answer(b"")
+        return mock.AsyncMock(side_effect=[answer(json.dumps(payload).encode()), count])
+
+    async def test_probe_uses_samples_when_mp4_duration_fields_are_zero(self) -> None:
+        with mock.patch.object(media_mod.asyncio, "create_subprocess_exec",
+                               new=self._zero_duration_probe(3641, readable=3641)):
             meta, why = await media_mod.probe_media_detailed(self.dir / "gsr.mp4")
         self.assertEqual(why, "")
         self.assertIsNotNone(meta)
         self.assertAlmostEqual(meta["duration"], 60.6834, places=3)
+
+    async def test_probe_refuses_the_estimate_when_the_frames_cannot_be_read(self) -> None:
+        # #154's real file: 3655 frames in the index, all stamped at zero, and
+        # FFmpeg reads one of them. Calling it 60 seconds let the trim replace
+        # the recording with a single frame.
+        with mock.patch.object(media_mod.asyncio, "create_subprocess_exec",
+                               new=self._zero_duration_probe(3655, readable=1)):
+            meta, why = await media_mod.probe_media_detailed(self.dir / "gsr.mp4")
+        self.assertIsNone(meta)
+        self.assertIn("1 of its 3655 frames", why)
+
+    async def test_probe_keeps_the_estimate_when_the_count_is_unavailable(self) -> None:
+        # No count is no opinion, so behaviour is exactly what it was without it.
+        with mock.patch.object(media_mod.asyncio, "create_subprocess_exec",
+                               new=self._zero_duration_probe(3641, readable=None)):
+            meta, why = await media_mod.probe_media_detailed(self.dir / "gsr.mp4")
+        self.assertEqual(why, "")
+        self.assertAlmostEqual(meta["duration"], 60.6834, places=3)
+
+    def _long_clip(self, seconds: int) -> Path:
+        path = self.dir / "long.mp4"
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+             "-i", "testsrc=size=64x64:rate=15", "-t", str(seconds),
+             "-g", "15", str(path)],
+            check=True,
+        )
+        return path
+
+    async def test_a_healthy_trim_still_replaces_the_clip(self) -> None:
+        clip = self._long_clip(6)
+        await recorder_mod._trim_to_last_n_seconds(clip, 2)
+        self.assertLess(await media_mod.get_duration(clip), 3)
+        self.assertFalse(list(self.dir.glob("*.trim.*")))
+
+    async def test_a_trim_that_comes_out_broken_keeps_the_whole_clip(self) -> None:
+        # ffmpeg exits cleanly on the collapsed file and writes one frame. The
+        # original must survive, byte for byte, with nothing left behind.
+        clip = self._long_clip(6)
+        original = clip.read_bytes()
+
+        async def duration(path: Path) -> float:
+            return 60.0 if path == clip else 0.017
+
+        with mock.patch.object(recorder_mod, "_get_duration", new=duration):
+            with self.assertLogs("vice.recorder", level="ERROR") as caught:
+                await recorder_mod._trim_to_last_n_seconds(clip, 20)
+        self.assertEqual(clip.read_bytes(), original)
+        self.assertFalse(list(self.dir.glob("*.trim.*")))
+        self.assertIn("keeping the whole clip", "\n".join(caught.output))
 
     async def test_failure_is_logged_at_warning_with_the_file_name(self) -> None:
         junk = self.dir / "broken.mp4"

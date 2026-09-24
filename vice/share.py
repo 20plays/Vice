@@ -683,7 +683,7 @@ async def _ffprobe(path: Path) -> dict:
         # served as-is.
         return meta or _unreadable_meta(why)
     log.warning("ffprobe cannot read %s (%s), attempting moov remux",
-                path.name, why or "no reason from ffprobe")
+                path.name, why or "it reads, but reports no duration")
     if await _remux_moov(path):
         meta, why = await probe_media_detailed(path)
         log.info(
