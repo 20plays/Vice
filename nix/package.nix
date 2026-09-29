@@ -33,7 +33,7 @@ let
 in
 python3Packages.buildPythonApplication rec {
   pname = "vice-clipper";
-  version = "2.13.0";
+  version = builtins.head (builtins.match ''.*__version__ = "([^"]+)".*'' (builtins.readFile ../vice/__init__.py));
   pyproject = true;
 
   src = lib.cleanSource ../.;
@@ -53,8 +53,14 @@ python3Packages.buildPythonApplication rec {
     pywebview
   ] ++ lib.optionals withQtWebEngine [ pyqt6 pyqt6-webengine qtpy ];
 
-  # The test suite drives a real compositor, evdev nodes and GPU capture.
-  doCheck = false;
+  nativeCheckInputs = [ python3Packages.unittestCheckHook ];
+  unittestFlagsArray = [ "-s" "tests" ];
+
+  # The em-dash guard walks the whole tree and would scan setuptools' build/ copy of the bundle.
+  preCheck = ''
+    export HOME=$(mktemp -d)
+    rm -rf build
+  '';
 
   dontWrapQtApps = true;
 
