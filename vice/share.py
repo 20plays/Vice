@@ -271,11 +271,12 @@ def _thumb_path(path: Path) -> Path:
     return THUMB_DIR / f"{key}.jpg"
 
 
-def _purge_slug_thumbs(slug: str) -> None:
+def _purge_slug_thumbs(slug: str, keep: frozenset[Path] = frozenset()) -> None:
     """Remove any cached thumbs for a slug (legacy + versioned variants)."""
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     for t in THUMB_DIR.glob(f"{glob.escape(slug)}*.jpg"):
-        t.unlink(missing_ok=True)
+        if t not in keep:
+            t.unlink(missing_ok=True)
 
 
 def _proxy_path(path: Path) -> Path:
@@ -290,12 +291,20 @@ def _proxy_path(path: Path) -> Path:
     return PROXY_DIR / f"{key}_v2.mp4"
 
 
-def _purge_slug_proxies(slug: str) -> None:
+def _purge_slug_proxies(slug: str, keep: frozenset[Path] = frozenset()) -> None:
     """Remove any cached preview proxies for a slug (all file versions)."""
     PROXY_DIR.mkdir(parents=True, exist_ok=True)
     for pattern in (f"{glob.escape(slug)}*.mp4", f"{glob.escape(slug)}*_audio_*.m4a"):
         for p in PROXY_DIR.glob(pattern):
-            p.unlink(missing_ok=True)
+            if p not in keep:
+                p.unlink(missing_ok=True)
+
+
+def _current_cache_files(path: Path) -> list[Path]:
+    """The thumbnail and previews already made for this exact file version."""
+    proxy = _proxy_path(path)
+    found = [_thumb_path(path), proxy, *PROXY_DIR.glob(f"{glob.escape(proxy.stem)}_audio_*.m4a")]
+    return [p for p in found if p.exists()]
 
 
 def _audio_preview_path(path: Path, index: int) -> Path:
@@ -1695,14 +1704,24 @@ class ShareServer:
         if new_path.exists() and new_path != path:
             return web.json_response({"ok": False, "error": "A clip with that name already exists"})
 
+        # A rename keeps the file's size and modification time, so the cached
+        # thumbnail and previews are still valid. Purging them made an H.265
+        # clip transcode its preview again after every rename (#226).
+        cached = frozenset(_current_cache_files(path))
+        old_stem = path.stem
         path.rename(new_path)
         new_slug = new_path.stem
 
         # Update internal state
         self._clips.pop(slug, None)
         self._clips[new_slug] = new_path
-        _purge_slug_thumbs(slug)
-        _purge_slug_proxies(slug)
+        _purge_slug_thumbs(slug, keep=cached)
+        _purge_slug_proxies(slug, keep=cached)
+        for old in cached:
+            try:
+                old.replace(old.with_name(new_slug + old.name[len(old_stem):]))
+            except OSError as exc:
+                log.debug("Could not carry %s across the rename: %s", old.name, exc)
         self._meta.pop(slug, None)
 
         # Rename highlights file if it exists
