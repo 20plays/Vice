@@ -21,6 +21,8 @@ import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
+from .runtime import actual_home_dir
+
 log = logging.getLogger(__name__)
 
 ActiveWindow = dict  # {"process": str, "class": str, "pid": int}
@@ -462,3 +464,76 @@ def adapter_name() -> str:
         _get_active_window_kde:      "kde",
         _get_active_window_x11:      "x11",
     }.get(_current_adapter(), "none")
+
+
+# Where steam keeps its files: the native install, the legacy symlink, flatpak.
+_STEAM_ROOT_DIRS = (
+    ".local/share/Steam",
+    ".steam/steam",
+    ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+)
+# Steam installs these as apps too, but they are tools not games.
+_STEAM_TOOL_PREFIXES = ("proton", "steam linux runtime", "steamworks")
+_STEAM_LIBRARY_PATH_RE = re.compile(r'"path"\s+"([^"]+)"')
+_STEAM_NAME_RE = re.compile(r'"name"\s+"([^"]+)"')
+
+
+def _steam_roots() -> list[Path]:
+    """Every steam folder worth checking, without repeats.
+
+    Each root's libraryfolders.vdf lists the extra libraries (other drives), so
+    it is read from all of them, flatpak included.
+    """
+    roots = [actual_home_dir() / rel for rel in _STEAM_ROOT_DIRS]
+    libraries: list[Path] = []
+    for root in roots:
+        vdf = root / "steamapps" / "libraryfolders.vdf"
+        try:
+            text = vdf.read_text(errors="replace")
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            log.debug("Cannot read the Steam library list %s: %s", vdf, exc)
+            continue
+        libraries += [Path(p) for p in _STEAM_LIBRARY_PATH_RE.findall(text)]
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots + libraries:
+        # ~/.steam/steam is normally a symlink to the native install.
+        key = root.resolve()
+        if key not in seen:
+            seen.add(key)
+            unique.append(root)
+    return unique
+
+
+def steam_game_name(app_id) -> Optional[str]:
+    """Name of an installed Steam game, read from its appmanifest.
+
+    Returns None for an unknown id and for Proton, runtime and redistributable
+    entries, so a tool never shows up as the game being played.
+    """
+    app_id = str(app_id or "")
+    if not app_id.isdigit():
+        return None
+    for root in _steam_roots():
+        manifest = root / "steamapps" / f"appmanifest_{app_id}.acf"
+        try:
+            text = manifest.read_text(errors="replace")
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            log.debug("Cannot read the Steam manifest %s: %s", manifest, exc)
+            continue
+        found = _STEAM_NAME_RE.search(text)
+        if not found:
+            log.debug("The Steam manifest %s has no name", manifest)
+            continue
+        name = found.group(1).strip()
+        if name.lower().startswith(_STEAM_TOOL_PREFIXES):
+            log.debug("Steam app %s (%s) is a tool, not a game", app_id, name)
+            return None
+        return name
+    log.debug("No Steam manifest for app %s in any library", app_id)
+    return None
