@@ -812,6 +812,8 @@
     "restartBody": "The sharing settings are saved, but the server only picks up a new port or tunnel setting when the daemon restarts.",
     "clipFilenameHelp": "Leave empty for the default Vice_Clip_4 naming. Use {n} for the clip number, {date}, {time}, and {game} (needs the toggle above). Clips are never overwritten.",
     "discordEnabledHelp": "Puts \"Clipping <Game> with Vice\" on your Discord profile while a known game is focused. On by default, and window titles are never sent.",
+    "discordGameIcons": "Show the game's icon",
+    "discordGameIconsHelp": "Shows the game's own Discord icon on your profile, with Vice's logo as a small badge. Vice looks the game up in Discord's public list of detectable games and caches the result. Off, or if a lookup fails, shows the plain Vice logo.",
     "discordCustomGamesHelp": "One game per line: {format}. Matches are case-insensitive substrings checked against the focused window's process name and class. The bundled list already covers over 300 games.",
     "gsrArgsHelp": "Appended to the recorder command as written. Example: {example}",
     "language": "Language",

@@ -157,7 +157,10 @@ class _FakeDiscordRPC:
 
 def _discord_daemon(*, enabled: bool = True, client_id: str | None = None) -> ViceDaemon:
     daemon = ViceDaemon.__new__(ViceDaemon)
-    daemon.cfg = Config(discord=DiscordConfig(enabled=enabled, client_id_override=client_id))
+    # Game icons would start a real Discord lookup, and these tests assert the plain logo.
+    daemon.cfg = Config(discord=DiscordConfig(
+        enabled=enabled, client_id_override=client_id, game_icons=False,
+    ))
     daemon._discord_rpc = None
     daemon._discord_task = None
     daemon._discord_client_id = None

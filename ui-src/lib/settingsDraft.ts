@@ -54,6 +54,7 @@ export interface Draft {
   cloudflareTunnel: boolean;
 
   discordEnabled: boolean;
+  discordGameIcons: boolean;
   discordClientId: string;
   discordCustomGames: string;
 
@@ -155,6 +156,7 @@ export function draftFromConfig(config: Config): Draft {
     cloudflareTunnel: s.cloudflare_tunnel !== false,
 
     discordEnabled: Boolean(d.enabled),
+    discordGameIcons: d.game_icons !== false,
     discordClientId: str(d.client_id_override, ''),
     discordCustomGames: (Array.isArray(d.custom_games) ? d.custom_games : [])
       .map(raw => {
@@ -248,6 +250,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
     ui: {hardware_video_decode: draft.hardwareDecode},
     discord: {
       enabled: draft.discordEnabled,
+      game_icons: draft.discordGameIcons,
       client_id_override: draft.discordClientId.trim() || null,
       custom_games: parseCustomGames(draft.discordCustomGames),
     },
