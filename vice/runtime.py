@@ -23,6 +23,9 @@ RUNTIME_ENV_KEYS = (
     "DBUS_SESSION_BUS_ADDRESS",
     "XDG_SESSION_TYPE",
     "XDG_CURRENT_DESKTOP",
+    # The X session's cookie. Without it gpu-screen-recorder is refused by X,
+    # gives up on X11 and fails with "failed to create window" (#231).
+    "XAUTHORITY",
 )
 
 
@@ -121,11 +124,18 @@ def user_systemd_env_snapshot() -> dict[str, str]:
     return values
 
 
-def load_user_systemd_env() -> None:
-    """Hydrate graphical session vars from the user systemd manager when needed."""
+def load_user_systemd_env() -> list[str]:
+    """Hydrate graphical session vars from the user systemd manager when needed.
+
+    Only fills what is missing or unexpanded, never replaces a working value.
+    Returns the keys it set.
+    """
+    filled = []
     for key, value in user_systemd_env_snapshot().items():
         if not os.environ.get(key) or _needs_shell_expansion(os.environ.get(key)):
             os.environ[key] = value
+            filled.append(key)
+    return filled
 
 
 def has_display() -> bool:

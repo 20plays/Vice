@@ -410,8 +410,14 @@ GSR_REPO_URL="${VICE_GSR_REPO_URL:-https://repo.dec05eba.com/gpu-screen-recorder
 # host, which serves no git protocol at all, and the install had nowhere to go
 # from there (#182).
 GSR_SNAPSHOT_URL="${VICE_GSR_SNAPSHOT_URL:-https://dec05eba.com/snapshot}"
-GSR_DEFAULT_REF="5.13.3"
-GSR_FFMPEG6_REF="5.12.5"
+# 6.1.2 hardened gsr-kms-server, the helper meson installs with elevated
+# capabilities, so nothing older should be built where 6.x builds. 6.1.3 also
+# stops using FFmpeg 8 only code on FFmpeg 7, which wrote MP4s with every frame
+# stamped at zero on Debian 13 (#154).
+GSR_DEFAULT_REF="6.1.3"
+# FFmpeg 4.x (Ubuntu 22.04) lacks the Vulkan fields 6.x uses. 5.12.5 is the
+# newest tag that builds there.
+GSR_FFMPEG4_REF="5.12.5"
 
 _gsr_libavutil_major() {
     local version major
@@ -431,12 +437,10 @@ _gsr_select_ref() {
 
     local major
     if major="$(_gsr_libavutil_major)"; then
-        # Ubuntu 24.04 / Linux Mint 22.x ship FFmpeg 6.1 (libavutil 58).
-        # GSR 5.13.x enables Vulkan encoder code that expects newer FFmpeg
-        # Vulkan queue-family fields, so pin to the last known FFmpeg 6-safe
-        # tag on those systems.
-        if (( major < 59 )); then
-            printf '%s\n' "$GSR_FFMPEG6_REF"
+        # 6.1.3 builds against FFmpeg 5.1 (Debian 12), 6.1 (Ubuntu 24.04) and
+        # 7.1 (Debian 13). FFmpeg 4.4 (libavutil 56, Ubuntu 22.04) does not.
+        if (( major < 57 )); then
+            printf '%s\n' "$GSR_FFMPEG4_REF"
             return 0
         fi
     fi
@@ -541,8 +545,8 @@ _gsr_build_from_source() {
     gsr_ref="$(_gsr_select_ref)"
     if [[ -n "${VICE_GSR_REF:-}" ]]; then
         info "Using gpu-screen-recorder source ref from VICE_GSR_REF: $gsr_ref"
-    elif [[ "$gsr_ref" == "$GSR_FFMPEG6_REF" ]]; then
-        info "Using gpu-screen-recorder $gsr_ref for FFmpeg 6.x compatibility"
+    elif [[ "$gsr_ref" == "$GSR_FFMPEG4_REF" ]]; then
+        info "Using gpu-screen-recorder $gsr_ref for FFmpeg 4.x compatibility"
     else
         info "Using gpu-screen-recorder source ref: $gsr_ref"
     fi
@@ -564,9 +568,49 @@ _gsr_build_from_source() {
     rm -rf "$tmpdir" 2>/dev/null || sudo rm -rf "$tmpdir"
 }
 
+_gsr_installed_version() {
+    gpu-screen-recorder --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1
+}
+
+# True when $1 is a strictly older version than $2.
+_version_lt() {
+    [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$1" ]]
+}
+
+# A package manager owns a packaged gpu-screen-recorder and updates it there.
+# One nothing owns was built from source, by an earlier run of this script or
+# by hand, so keeping it current is this script's job.
+_gsr_owned_by_package() {
+    local bin="$1"
+    case "$PKG" in
+        apt)        dpkg -S "$bin" &>/dev/null ;;
+        dnf|zypper) rpm -qf "$bin" &>/dev/null ;;
+        pacman)     pacman -Qo "$bin" &>/dev/null ;;
+        *)          return 0 ;;
+    esac
+}
+
 install_gpu_screen_recorder() {
     if command -v gpu-screen-recorder &>/dev/null; then
-        info "gpu-screen-recorder already installed: $(command -v gpu-screen-recorder)"
+        local bin have want
+        bin="$(command -v gpu-screen-recorder)"
+        have="$(_gsr_installed_version)"
+        want="$(_gsr_select_ref)"
+        # An unreadable version is no opinion: leave it exactly as it was.
+        if [[ -n "$have" ]] && _version_lt "$have" "$want"; then
+            if _gsr_owned_by_package "$bin"; then
+                warn "gpu-screen-recorder $have is older than $want. Update it with your package manager; 6.1.2 fixed a security issue in its privileged helper."
+            else
+                info "gpu-screen-recorder $have was built from source, updating it to $want..."
+                if _gsr_build_from_source; then
+                    info "gpu-screen-recorder updated: $(_gsr_installed_version)"
+                else
+                    warn "Could not update gpu-screen-recorder, keeping $have."
+                fi
+                return 0
+            fi
+        fi
+        info "gpu-screen-recorder already installed: $bin"
         return 0
     fi
     info "Installing gpu-screen-recorder (Vice's required recording backend)..."

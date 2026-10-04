@@ -2510,6 +2510,43 @@ class GSRHealthTests(unittest.TestCase):
         self.assertFalse(recorder.is_healthy())
 
 
+class SessionEnvironmentTests(unittest.TestCase):
+    """What a daemon started before the desktop finishes logging in needs (#231)."""
+
+    def test_xauthority_is_taken_from_the_session_when_missing(self) -> None:
+        from vice import runtime
+        session = {"DISPLAY": ":0", "XAUTHORITY": "/tmp/xauth_abc"}
+        with mock.patch.dict(os.environ, {"DISPLAY": ":0"}, clear=True), \
+                mock.patch.object(runtime, "user_systemd_env_snapshot", return_value=session):
+            filled = runtime.load_user_systemd_env()
+            self.assertEqual(filled, ["XAUTHORITY"])
+            self.assertEqual(os.environ["XAUTHORITY"], "/tmp/xauth_abc")
+
+    def test_a_value_already_set_is_never_replaced(self) -> None:
+        from vice import runtime
+        session = {"XAUTHORITY": "/tmp/xauth_other"}
+        with mock.patch.dict(os.environ, {"XAUTHORITY": "/home/u/.Xauthority"}, clear=True), \
+                mock.patch.object(runtime, "user_systemd_env_snapshot", return_value=session):
+            self.assertEqual(runtime.load_user_systemd_env(), [])
+            self.assertEqual(os.environ["XAUTHORITY"], "/home/u/.Xauthority")
+
+    def test_an_x_refusal_names_the_cause_not_the_symptom(self) -> None:
+        from vice.recorder import _gsr_runtime_error
+        # gpu-screen-recorder 6.1.2's output against an X server that wants a
+        # cookie it was not given. The last line is all the reporter saw.
+        stderr = (
+            "Authorization required, but no authorization protocol specified\n"
+            "gsr warning: failed to connect to the X server. Assuming wayland is running without Xwayland\n"
+            "gsr error: gsr_window_wayland_init failed: failed to connect to the Wayland server\n"
+            "gsr error: failed to create window\n"
+        )
+        self.assertIn("XAUTHORITY", _gsr_runtime_error(stderr))
+        self.assertEqual(
+            _gsr_runtime_error("gsr error: failed to create window\n"),
+            "gsr error: failed to create window",
+        )
+
+
 class RecorderWatchdogTests(unittest.IsolatedAsyncioTestCase):
     def _daemon(self, recorder: _FakeRecorder) -> main_mod.ViceDaemon:
         with mock.patch("vice.main.load_config", return_value=Config()):
@@ -2520,7 +2557,7 @@ class RecorderWatchdogTests(unittest.IsolatedAsyncioTestCase):
         daemon.share = _FakeShare()
         return daemon
 
-    async def _run_watchdog(self, daemon, max_sleeps: int, wall_times=None):
+    async def _run_watchdog(self, daemon, max_sleeps: int, wall_times=None, env_loader=None):
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
@@ -2528,10 +2565,14 @@ class RecorderWatchdogTests(unittest.IsolatedAsyncioTestCase):
             if len(sleeps) >= max_sleeps:
                 raise asyncio.CancelledError
 
+        # The real loader asks this machine's systemd for its session and
+        # copies it into the test process, which would undo any test that
+        # clears DISPLAY to stand in for a headless runner.
+        loader = env_loader or mock.Mock(return_value=[])
         patches = [mock.patch("vice.main.asyncio.sleep", fake_sleep)]
         if wall_times is not None:
             patches.append(mock.patch("vice.main.time.time", side_effect=wall_times))
-        with patches[0]:
+        with patches[0], mock.patch("vice.main.load_user_systemd_env", loader):
             ctx = patches[1] if len(patches) > 1 else None
             try:
                 if ctx:
@@ -2542,6 +2583,34 @@ class RecorderWatchdogTests(unittest.IsolatedAsyncioTestCase):
             except asyncio.CancelledError:
                 pass
         return sleeps
+
+    async def test_a_restart_picks_up_a_session_exported_after_boot(self) -> None:
+        # #231: the daemon started at boot before Plasma exported XAUTHORITY,
+        # so every restart reused that environment and failed until a manual
+        # restart. Each attempt has to look at the session again first.
+        recorder = _FakeRecorder()
+        recorder.healthy = False
+        recorder.heal_on_start = True
+        recorder.start_error = RuntimeError("gpu-screen-recorder failed to start: failed to create window")
+        daemon = self._daemon(recorder)
+        refreshes: list[int] = []
+
+        def session_env() -> list:
+            refreshes.append(recorder.start_calls)
+            if len(refreshes) < 2:
+                return []
+            recorder.start_error = None  # the desktop has exported its session
+            return ["XAUTHORITY"]
+
+        with self.assertLogs("vice", level="INFO") as caught:
+            await self._run_watchdog(daemon, max_sleeps=5, env_loader=mock.Mock(side_effect=session_env))
+        await asyncio.sleep(0)
+
+        self.assertEqual(recorder.start_calls, 2)
+        # Looked before each attempt, not after.
+        self.assertEqual(refreshes[:2], [0, 1])
+        self.assertIn("Picked up XAUTHORITY from the session", "\n".join(caught.output))
+        self.assertTrue(any(m.get("recording") for m in daemon.share.messages))
 
     async def test_dead_recorder_is_restarted(self) -> None:
         recorder = _FakeRecorder()

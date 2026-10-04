@@ -56,6 +56,7 @@ from .runtime import (
     resolve_path,
     has_display,
     installed_version,
+    load_user_systemd_env,
     runtime_env_snapshot,
     running_under_systemd,
     systemd_unit_loaded,
@@ -592,6 +593,15 @@ class ViceDaemon:
                 last_wall = time.time()
                 continue
 
+            # A daemon started at boot can come up before the desktop has
+            # exported its session, and a restart would otherwise reuse that
+            # environment forever. Plasma's XAUTHORITY was the one missing in
+            # #231: every retry failed until a manual restart picked it up.
+            filled = await asyncio.to_thread(load_user_systemd_env)
+            if filled:
+                log.info("Picked up %s from the session before restarting the recorder",
+                         ", ".join(filled))
+
             try:
                 async with self._config_apply_lock:
                     async with self._clip_lock:
@@ -1105,6 +1115,8 @@ class ViceDaemon:
         """How this machine should update, so the notice can say it exactly."""
         if _installed_via_aur():
             return {"method": "aur", "command": "yay -Syu vice-clipper"}
+        if _installed_via_nix():
+            return {"method": "nix", "command": "nix flake update vice && sudo nixos-rebuild switch"}
         if _using_install_script_venv():
             return {"method": "script", "command": "cd Vice && git pull && ./install.sh"}
         return {"method": "unknown", "command": ""}
@@ -1500,6 +1512,11 @@ def _installed_via_aur() -> bool:
     if owner.returncode != 0:
         return False
     return "vice-clipper" in owner.stdout
+
+
+def _installed_via_nix() -> bool:
+    vice_path = _vice_command_path()
+    return vice_path is not None and str(vice_path).startswith("/nix/store/")
 
 
 def _using_install_script_venv() -> bool:
@@ -1983,6 +2000,11 @@ def uninstall(yes: bool) -> None:
     if _installed_via_aur():
         click.echo("Vice was installed via AUR.")
         click.echo("Run: yay -Rns vice-clipper")
+        return
+
+    if _installed_via_nix():
+        click.echo("Vice is installed by Nix and cannot remove itself.")
+        click.echo("Drop services.vice.enable (or the package) and rebuild.")
         return
 
     # 1. Stop daemon

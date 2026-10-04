@@ -2452,3 +2452,51 @@ class ShareTokenTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(self.server, "_serve_preview_proxy") as proxy:
             self.assertEqual(await self._status(f"{self.public}/v/{token}?proxy=1"), 200)
         proxy.assert_not_called()
+
+    async def _rename(self, slug: str, name: str) -> str:
+        async with self.client.post(f"{self.local}/api/clips/{slug}/rename", json={"name": name}) as resp:
+            body = await resp.json()
+        self.assertTrue(body.get("ok"), body)
+        return body["clip"]["slug"] if "clip" in body else body["slug"]
+
+    def _seed_cache(self, clip: Path) -> dict:
+        proxy = _share._proxy_path(clip)
+        files = {
+            "thumb": _share._thumb_path(clip),
+            "proxy": proxy,
+            "audio": proxy.with_name(f"{proxy.stem}_audio_0.m4a"),
+        }
+        for kind, path in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(kind.encode())
+        return files
+
+    async def test_a_rename_keeps_the_cached_preview_and_thumbnail(self) -> None:
+        # #226: purging these made an H.265 clip transcode its preview again
+        # after every rename, though the file itself had not changed.
+        clip = self.output_dir / "Vice_Clip_1.mp4"
+        self._seed_cache(clip)
+        stale = _share.THUMB_DIR / "Vice_Clip_1_1_1.jpg"
+        stale.write_bytes(b"an older version of the file")
+
+        new_slug = await self._rename("Vice_Clip_1", "clutch round")
+        renamed = self.output_dir / f"{new_slug}.mp4"
+
+        proxy = _share._proxy_path(renamed)
+        self.assertEqual(_share._thumb_path(renamed).read_bytes(), b"thumb")
+        self.assertEqual(proxy.read_bytes(), b"proxy")
+        self.assertEqual(proxy.with_name(f"{proxy.stem}_audio_0.m4a").read_bytes(), b"audio")
+        self.assertFalse(list(_share.THUMB_DIR.glob("Vice_Clip_1*")), "old thumbnails left behind")
+        self.assertFalse(list(_share.PROXY_DIR.glob("Vice_Clip_1*")), "old previews left behind")
+
+    async def test_a_longer_name_that_starts_with_the_old_one_keeps_what_it_moved(self) -> None:
+        # The purge matches "Vice_Clip_1*", which also matches "Vice_Clip_1-final".
+        clip = self.output_dir / "Vice_Clip_1.mp4"
+        self._seed_cache(clip)
+
+        new_slug = await self._rename("Vice_Clip_1", "Vice_Clip_1 final")
+        renamed = self.output_dir / f"{new_slug}.mp4"
+
+        self.assertTrue(new_slug.startswith("Vice_Clip_1"))
+        self.assertEqual(_share._thumb_path(renamed).read_bytes(), b"thumb")
+        self.assertEqual(_share._proxy_path(renamed).read_bytes(), b"proxy")
