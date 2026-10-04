@@ -1116,7 +1116,7 @@ class ViceDaemon:
         if _installed_via_aur():
             return {"method": "aur", "command": "yay -Syu vice-clipper"}
         if _installed_via_nix():
-            return {"method": "nix", "command": "nix flake update vice && nixos-rebuild switch"}
+            return {"method": "nix", "command": "nix flake update vice && sudo nixos-rebuild switch"}
         if _using_install_script_venv():
             return {"method": "script", "command": "cd Vice && git pull && ./install.sh"}
         return {"method": "unknown", "command": ""}

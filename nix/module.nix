@@ -39,8 +39,6 @@ in
       after = [ "graphical-session.target" ];
       wantedBy = lib.optionals cfg.autoStart [ "graphical-session.target" "default.target" ];
 
-      # Everything the recorder needs to find the session is set by the
-      # compositor, not by us, so import it rather than hardcoding a guess.
       unitConfig = {
         StartLimitIntervalSec = 60;
         StartLimitBurst = 3;
@@ -51,7 +49,10 @@ in
         ExecStart = "${cfg.package}/bin/vice start --no-open-ui";
         Restart = "on-failure";
         RestartSec = 3;
-        PassEnvironment = "WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XDG_SESSION_TYPE XDG_CURRENT_DESKTOP";
+        # Everything the recorder needs to find the session is set by the
+        # compositor, not by us, so import it rather than hardcoding a guess.
+        # XAUTHORITY is the X cookie; without it X refuses the recorder (#231).
+        PassEnvironment = "WAYLAND_DISPLAY DISPLAY XAUTHORITY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XDG_SESSION_TYPE XDG_CURRENT_DESKTOP";
       };
     };
   };

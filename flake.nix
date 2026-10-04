@@ -10,11 +10,11 @@
     in
     {
       overlays.default = final: prev: {
-        vice-clipper = final.callPackage ./nix/package.nix { inherit (final.xorg) xprop; };
+        vice-clipper = final.callPackage ./nix/package.nix { xprop = final.xprop or final.xorg.xprop; };
       };
 
       packages = forAllSystems (pkgs: rec {
-        vice-clipper = pkgs.callPackage ./nix/package.nix { inherit (pkgs.xorg) xprop; };
+        vice-clipper = pkgs.callPackage ./nix/package.nix { xprop = pkgs.xprop or pkgs.xorg.xprop; };
         default = vice-clipper;
       });
 
