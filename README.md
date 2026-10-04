@@ -370,6 +370,7 @@ Vice is better because these people sent patches:
 - [@20plays](https://github.com/20plays), for preserving working Arch installations during installer dependency checks and selecting the distro Python for QtWebEngine
 - [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool, and for fixing scroll dismissal in clip context menus
 - [@UMCEKO](https://github.com/UMCEKO), for the NixOS package and module
+- [@marcobabinski](https://github.com/marcobabinski), for the Brazilian Portuguese translation
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 
