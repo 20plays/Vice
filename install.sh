@@ -410,8 +410,14 @@ GSR_REPO_URL="${VICE_GSR_REPO_URL:-https://repo.dec05eba.com/gpu-screen-recorder
 # host, which serves no git protocol at all, and the install had nowhere to go
 # from there (#182).
 GSR_SNAPSHOT_URL="${VICE_GSR_SNAPSHOT_URL:-https://dec05eba.com/snapshot}"
-GSR_DEFAULT_REF="5.13.3"
-GSR_FFMPEG6_REF="5.12.5"
+# 6.1.2 hardened gsr-kms-server, the helper meson installs with elevated
+# capabilities, so nothing older should be built where 6.x builds. 6.1.3 also
+# stops using FFmpeg 8 only code on FFmpeg 7, which wrote MP4s with every frame
+# stamped at zero on Debian 13 (#154).
+GSR_DEFAULT_REF="6.1.3"
+# FFmpeg 4.x (Ubuntu 22.04) lacks the Vulkan fields 6.x uses. 5.12.5 is the
+# newest tag that builds there.
+GSR_FFMPEG4_REF="5.12.5"
 
 _gsr_libavutil_major() {
     local version major
@@ -431,12 +437,10 @@ _gsr_select_ref() {
 
     local major
     if major="$(_gsr_libavutil_major)"; then
-        # Ubuntu 24.04 / Linux Mint 22.x ship FFmpeg 6.1 (libavutil 58).
-        # GSR 5.13.x enables Vulkan encoder code that expects newer FFmpeg
-        # Vulkan queue-family fields, so pin to the last known FFmpeg 6-safe
-        # tag on those systems.
-        if (( major < 59 )); then
-            printf '%s\n' "$GSR_FFMPEG6_REF"
+        # 6.1.3 builds against FFmpeg 5.1 (Debian 12), 6.1 (Ubuntu 24.04) and
+        # 7.1 (Debian 13). FFmpeg 4.4 (libavutil 56, Ubuntu 22.04) does not.
+        if (( major < 57 )); then
+            printf '%s\n' "$GSR_FFMPEG4_REF"
             return 0
         fi
     fi
@@ -541,8 +545,8 @@ _gsr_build_from_source() {
     gsr_ref="$(_gsr_select_ref)"
     if [[ -n "${VICE_GSR_REF:-}" ]]; then
         info "Using gpu-screen-recorder source ref from VICE_GSR_REF: $gsr_ref"
-    elif [[ "$gsr_ref" == "$GSR_FFMPEG6_REF" ]]; then
-        info "Using gpu-screen-recorder $gsr_ref for FFmpeg 6.x compatibility"
+    elif [[ "$gsr_ref" == "$GSR_FFMPEG4_REF" ]]; then
+        info "Using gpu-screen-recorder $gsr_ref for FFmpeg 4.x compatibility"
     else
         info "Using gpu-screen-recorder source ref: $gsr_ref"
     fi
@@ -564,9 +568,49 @@ _gsr_build_from_source() {
     rm -rf "$tmpdir" 2>/dev/null || sudo rm -rf "$tmpdir"
 }
 
+_gsr_installed_version() {
+    gpu-screen-recorder --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1
+}
+
+# True when $1 is a strictly older version than $2.
+_version_lt() {
+    [[ "$1" != "$2" && "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$1" ]]
+}
+
+# A package manager owns a packaged gpu-screen-recorder and updates it there.
+# One nothing owns was built from source, by an earlier run of this script or
+# by hand, so keeping it current is this script's job.
+_gsr_owned_by_package() {
+    local bin="$1"
+    case "$PKG" in
+        apt)        dpkg -S "$bin" &>/dev/null ;;
+        dnf|zypper) rpm -qf "$bin" &>/dev/null ;;
+        pacman)     pacman -Qo "$bin" &>/dev/null ;;
+        *)          return 0 ;;
+    esac
+}
+
 install_gpu_screen_recorder() {
     if command -v gpu-screen-recorder &>/dev/null; then
-        info "gpu-screen-recorder already installed: $(command -v gpu-screen-recorder)"
+        local bin have want
+        bin="$(command -v gpu-screen-recorder)"
+        have="$(_gsr_installed_version)"
+        want="$(_gsr_select_ref)"
+        # An unreadable version is no opinion: leave it exactly as it was.
+        if [[ -n "$have" ]] && _version_lt "$have" "$want"; then
+            if _gsr_owned_by_package "$bin"; then
+                warn "gpu-screen-recorder $have is older than $want. Update it with your package manager; 6.1.2 fixed a security issue in its privileged helper."
+            else
+                info "gpu-screen-recorder $have was built from source, updating it to $want..."
+                if _gsr_build_from_source; then
+                    info "gpu-screen-recorder updated: $(_gsr_installed_version)"
+                else
+                    warn "Could not update gpu-screen-recorder, keeping $have."
+                fi
+                return 0
+            fi
+        fi
+        info "gpu-screen-recorder already installed: $bin"
         return 0
     fi
     info "Installing gpu-screen-recorder (Vice's required recording backend)..."
@@ -600,6 +644,13 @@ case "$PKG" in
     dnf)    install_pkgs_dnf    ;;
     zypper) install_pkgs_zypper ;;
 esac
+
+# KDE Plasma under Wayland tags clips through kdotool. It is packaged for few
+# distributions, so this says what to install rather than trying to do it.
+if [[ "$SESSION" == "wayland" && ( "${DE,,}" == *kde* || "${DE,,}" == *plasma* ) ]] \
+   && ! command -v kdotool &>/dev/null; then
+    warn "kdotool is not installed. Without it, KDE Plasma Wayland falls back to XWayland, which only sees XWayland windows, so native Wayland games save untagged."
+fi
 
 install_gpu_screen_recorder
 
@@ -753,7 +804,6 @@ clean_previous_local_install() {
     stop_running_service_for_reinstall
 
     rm -f "$USER_BIN/vice" "$USER_BIN/vice-app"
-    rm -rf "$VENV_DIR"
 
     shopt -s nullglob
     local stale_paths=(
@@ -776,8 +826,33 @@ clean_previous_local_install() {
 
 install_vice_venv() {
     info "Creating a dedicated virtual environment at $VENV_DIR"
+
+    # On Arch-family systems, pacman installs Python modules for the distro
+    # interpreter under /usr/bin. A pyenv/asdf/conda Python earlier in PATH
+    # cannot see python-pyqt6/python-pyqt6-webengine even with
+    # --system-site-packages, which previously made the installer silently
+    # replace the distro WebEngine with PyPI's H.264-less wheel.
+    local python_bin
+    python_bin="$(command -v python3)"
+    if [[ "$PKG" == "pacman" && -x /usr/bin/python3 ]]; then
+        python_bin=/usr/bin/python3
+    fi
+    info "Using Python for Vice venv: $python_bin ($("$python_bin" --version 2>&1))"
+
+    if [[ "$PKG" == "pacman" ]]; then
+        if ! "$python_bin" -c 'import PyQt6.QtWebEngineWidgets, qtpy' >/dev/null 2>&1; then
+            error "Arch Qt packages are installed but are not importable by $python_bin."
+            error "Vice will not replace them with PyPI Qt because that build cannot decode H.264."
+            error "Refresh the Arch/CachyOS package set, then rerun the installer:"
+            error "  sudo pacman -Syu python python-pyqt6 python-pyqt6-webengine python-qtpy"
+            exit 1
+        fi
+        info "System PyQt6 + QtWebEngine are importable; preserving distro H.264 support."
+    fi
+
+    clean_previous_local_install
     rm -rf "$VENV_DIR"
-    python3 -m venv --system-site-packages "$VENV_DIR"
+    "$python_bin" -m venv --system-site-packages "$VENV_DIR"
     "$VENV_DIR/bin/python" -m pip install --upgrade pip
 
     # Two-step install to avoid shadowing system Python packages:
@@ -812,7 +887,18 @@ OPTIONAL = {
 }
 
 def _missing(deps):
-    return [pypi for mod, pypi in deps.items() if importlib.util.find_spec(mod) is None]
+    missing = []
+    for mod, pypi in deps.items():
+        try:
+            spec = importlib.util.find_spec(mod)
+        except (ImportError, ModuleNotFoundError, AttributeError):
+            # find_spec("parent.child") imports the parent package first.
+            # A completely absent optional parent (for example PyQt6)
+            # is simply a missing dependency, not an installer failure.
+            spec = None
+        if spec is None:
+            missing.append(pypi)
+    return missing
 
 core_missing = _missing(CORE)
 if core_missing:
@@ -862,7 +948,6 @@ PY
 }
 
 info "Installing Vice Python package..."
-clean_previous_local_install
 install_vice_venv
 
 # Ensure $USER_BIN is on PATH for the rest of this script.

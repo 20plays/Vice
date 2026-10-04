@@ -50,10 +50,13 @@ from .recorder import (GSRRecorder, capture_screenshot, create_recorder, filenam
                        reap_orphaned_captures)
 from .runtime import (
     actual_home_dir,
+    claim_daemon_lock,
+    daemon_is_running,
     normalize_runtime_environment,
     resolve_path,
     has_display,
     installed_version,
+    load_user_systemd_env,
     runtime_env_snapshot,
     running_under_systemd,
     systemd_unit_loaded,
@@ -470,6 +473,7 @@ class ViceDaemon:
                 "recorder_error": self._recorder_error,
                 "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
                 "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
+                "disk": self._disk_stats(),
             })
         )
 
@@ -600,6 +604,15 @@ class ViceDaemon:
                 backoff = min(backoff * 2, 300.0)
                 last_wall = time.time()
                 continue
+
+            # A daemon started at boot can come up before the desktop has
+            # exported its session, and a restart would otherwise reuse that
+            # environment forever. Plasma's XAUTHORITY was the one missing in
+            # #231: every retry failed until a manual restart picked it up.
+            filled = await asyncio.to_thread(load_user_systemd_env)
+            if filled:
+                log.info("Picked up %s from the session before restarting the recorder",
+                         ", ".join(filled))
 
             try:
                 async with self._config_apply_lock:
@@ -1207,6 +1220,20 @@ class ViceDaemon:
         bundled = [(g["name"], g.get("matches")) for g in _DEFAULT_GAMES]
         return _best_game_match(custom, haystacks) or _best_game_match(bundled, haystacks)
 
+    def _disk_stats(self) -> Optional[dict]:
+        """Free space where clips land, for the Home readout.
+
+        A recorder that quietly runs out of room is the failure this is here to
+        make visible, so a drive that cannot be measured reports nothing rather
+        than a zero that would read as full.
+        """
+        try:
+            usage = shutil.disk_usage(resolve_path(self.cfg.output.directory))
+        except OSError as exc:
+            log.debug("Could not measure free space: %s", exc)
+            return None
+        return {"free": usage.free, "total": usage.total}
+
     def _get_status(self) -> dict:
         return {
             "ready":          self._ready,
@@ -1219,6 +1246,7 @@ class ViceDaemon:
             "session_active":   self._session_active,
             "clip_key":         self.cfg.hotkeys.clip,
             "hotkeys_available": self.hotkeys_available,
+            "disk":             self._disk_stats(),
             # None unless a newer release is known, so a UI opened long after
             # the check still learns about it.
             "update":           self._update,
@@ -1230,6 +1258,8 @@ class ViceDaemon:
         """How this machine should update, so the notice can say it exactly."""
         if _installed_via_aur():
             return {"method": "aur", "command": "yay -Syu vice-clipper"}
+        if _installed_via_nix():
+            return {"method": "nix", "command": "nix flake update vice && sudo nixos-rebuild switch"}
         if _using_install_script_venv():
             return {"method": "script", "command": "cd Vice && git pull && ./install.sh"}
         return {"method": "unknown", "command": ""}
@@ -1537,9 +1567,13 @@ class ViceDaemon:
                 asyncio.create_task(self._handle_clip_hotkey())
                 writer.write(b"ok\n")
             elif cmd == "stop":
-                writer.write(b"ok\n")
-                await writer.drain()
-                os.kill(os.getpid(), signal.SIGTERM)
+                try:
+                    writer.write(b"ok\n")
+                    await writer.drain()
+                finally:
+                    # A client closing early must not discard an accepted stop.
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return
             elif cmd == "status":
                 writer.write(json.dumps({
                     "running":        True,
@@ -1574,16 +1608,25 @@ class ViceDaemon:
 async def _ipc(command: str, timeout: float = 5.0) -> Optional[str]:
     if not SOCKET_FILE.exists():
         return None
+    writer = None
     try:
-        reader, writer = await asyncio.open_unix_connection(str(SOCKET_FILE))
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(str(SOCKET_FILE)), timeout=timeout,
+        )
         writer.write(command.encode() + b"\n")
-        await writer.drain()
+        await asyncio.wait_for(writer.drain(), timeout=timeout)
         response = await asyncio.wait_for(reader.readline(), timeout=timeout)
-        writer.close()
         return response.decode().strip()
     except Exception as exc:
         log.debug("IPC failed: %s", exc)
         return None
+    finally:
+        if writer is not None:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError as exc:
+                log.debug("Closing the IPC connection failed: %s", exc)
 
 
 def _vice_command_path() -> Optional[Path]:
@@ -1618,6 +1661,11 @@ def _installed_via_aur() -> bool:
     if owner.returncode != 0:
         return False
     return "vice-clipper" in owner.stdout
+
+
+def _installed_via_nix() -> bool:
+    vice_path = _vice_command_path()
+    return vice_path is not None and str(vice_path).startswith("/nix/store/")
 
 
 def _using_install_script_venv() -> bool:
@@ -1776,7 +1824,8 @@ def _running_daemon_version(status_line: Optional[str]) -> Optional[str]:
 def _take_over_outdated_daemon(status_line: Optional[str]) -> bool:
     """Stop a daemon running different code so this one can replace it.
 
-    Returns True when the socket is now free. Same version means the user
+    Returns True when replacement can proceed under the ownership lock.
+    Same version means the user
     simply started Vice twice, which stays an error: silently killing a
     healthy daemon would be worse than refusing.
     """
@@ -1794,19 +1843,19 @@ def _take_over_outdated_daemon(status_line: Optional[str]) -> bool:
 
     # The daemon closes its socket on the way out. Waiting on that rather than
     # on the process means this works whoever started it.
-    for _ in range(100):
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
         if not SOCKET_FILE.exists():
             return True
-        if asyncio.run(_ipc("status", timeout=0.5)) is None:
+        if not daemon_is_running(SOCKET_FILE, PID_FILE):
             break
         time.sleep(0.1)
 
-    if SOCKET_FILE.exists():
-        try:
-            SOCKET_FILE.unlink()
-        except OSError as exc:
-            log.error("Could not clear the old daemon's socket: %s", exc)
-            return False
+    if daemon_is_running(SOCKET_FILE, PID_FILE):
+        log.error("The previous Vice daemon is still shutting down; refusing to replace it")
+        return False
+    # start() clears leftover state after acquiring the ownership lock. A
+    # competing launcher may have claimed the socket while this one waited.
     return True
 
 
@@ -1827,6 +1876,7 @@ def start(debug: bool, open_ui: bool) -> None:
         wait_for_display()
         log.info("Runtime environment after session wait: %s", runtime_env_snapshot())
 
+    replacing = False
     if SOCKET_FILE.exists():
         resp = asyncio.run(_ipc("status", timeout=1.5))
         if resp is not None:
@@ -1836,18 +1886,26 @@ def start(debug: bool, open_ui: bool) -> None:
             # systemd it turns into an endless restart loop because retrying
             # can never clear the condition. Take over instead.
             if _take_over_outdated_daemon(resp):
-                pass
+                replacing = True
             else:
                 click.echo("Vice is already running. Use `vice stop` or `vice status`.", err=True)
                 sys.exit(1)
 
-        log.warning("Found stale IPC socket at %s, removing it", SOCKET_FILE)
-        try:
-            SOCKET_FILE.unlink()
-        except OSError as exc:
-            click.echo(f"Found stale socket at {SOCKET_FILE}, but could not remove it: {exc}", err=True)
-            sys.exit(1)
+    try:
+        lock = claim_daemon_lock(SOCKET_FILE, timeout=2.0 if replacing else 0.0)
+    except (OSError, RuntimeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    with lock:
+        if daemon_is_running(SOCKET_FILE, PID_FILE):
+            raise click.ClickException(
+                "Vice is already starting, running, or shutting down. "
+                "Its control socket did not answer; wait before trying again."
+            )
+        SOCKET_FILE.unlink(missing_ok=True)
+        _run_daemon(open_ui)
 
+
+def _run_daemon(open_ui: bool) -> None:
     try:
         daemon = ViceDaemon()
     except Exception:
@@ -2091,6 +2149,11 @@ def uninstall(yes: bool) -> None:
     if _installed_via_aur():
         click.echo("Vice was installed via AUR.")
         click.echo("Run: yay -Rns vice-clipper")
+        return
+
+    if _installed_via_nix():
+        click.echo("Vice is installed by Nix and cannot remove itself.")
+        click.echo("Drop services.vice.enable (or the package) and rebuild.")
         return
 
     # 1. Stop daemon

@@ -1,7 +1,7 @@
 """
 Vice share server, HTTP server that powers:
   • A local control UI/server  (/ → UI, /api/*, /ws, media)
-  • A public share-only server  (/c/{slug}, /v/{slug}, /t/{slug})
+  • A public share-only server  (/c/{token}, /v/{token}, /t/{token})
 
 WebSocket event types (server → client):
   {"type": "clip_saved",   "clip":  <clip_json>}
@@ -24,10 +24,13 @@ import glob
 import html
 import json
 import logging
+import os
 import re
+import secrets
 import shutil
 import socket
 import subprocess
+import tempfile
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -43,7 +46,7 @@ from .editor import (EditorProjectStore, ExportBusy, ExportManager, Source,
                      build_export_cmd, default_export_name, project_extent,
                      sanitize_export_name, text_file_contents,
                      validate_project)
-from .media import probe_media, probe_media_detailed
+from .media import communicate_with_timeout, probe_media, probe_media_detailed
 from .playlists import (IMAGE_PREFIX, PlaylistStore, build_tag_index,
                         image_slug)
 from .recorder import (IMAGE_EXTS, KEEP_ALL_STREAMS, _available_encoders,
@@ -204,6 +207,38 @@ def _save_views(views: dict[str, int]) -> None:
     tmp.replace(VIEWS_PATH)
 
 
+# Public links name a clip by a random token rather than its filename. Clip
+# names are sequential, so anyone holding one link could reach every other
+# clip by editing the number (#222). A token is all it takes to fetch a clip,
+# so the file is kept readable by its owner only.
+SHARE_TOKENS_PATH = actual_home_dir() / ".local" / "share" / "vice" / "share_tokens.json"
+
+
+def _load_share_tokens() -> dict[str, str]:
+    if not SHARE_TOKENS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(SHARE_TOKENS_PATH.read_text())
+        return {str(k): v for k, v in data.items() if isinstance(v, str) and v}
+    except Exception as exc:
+        # Failing closed: every clip gets a fresh token, so links shared
+        # before this point stop working rather than resolving to anything.
+        log.warning("Share link file %s is unreadable, issuing new links: %s",
+                    SHARE_TOKENS_PATH, exc)
+        return {}
+
+
+def _save_share_tokens(tokens: dict[str, str]) -> None:
+    SHARE_TOKENS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SHARE_TOKENS_PATH.with_suffix(".json.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # A leftover temp file from a crash keeps its old mode through O_CREAT.
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(json.dumps(tokens))
+    tmp.replace(SHARE_TOKENS_PATH)
+
+
 # Small bag of UI state that must outlive the web view. The native window's
 # localStorage does not reliably survive restarts on every QtWebEngine build,
 # which made the first-run tutorial reappear every launch.
@@ -236,11 +271,12 @@ def _thumb_path(path: Path) -> Path:
     return THUMB_DIR / f"{key}.jpg"
 
 
-def _purge_slug_thumbs(slug: str) -> None:
+def _purge_slug_thumbs(slug: str, keep: frozenset[Path] = frozenset()) -> None:
     """Remove any cached thumbs for a slug (legacy + versioned variants)."""
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     for t in THUMB_DIR.glob(f"{glob.escape(slug)}*.jpg"):
-        t.unlink(missing_ok=True)
+        if t not in keep:
+            t.unlink(missing_ok=True)
 
 
 def _proxy_path(path: Path) -> Path:
@@ -251,14 +287,73 @@ def _proxy_path(path: Path) -> Path:
         key = f"{path.stem}_{st.st_size}_{st.st_mtime_ns}"
     except OSError:
         key = path.stem
-    return PROXY_DIR / f"{key}.mp4"
+    # Invalidate previews made before the eight-bit playback fix (#172).
+    return PROXY_DIR / f"{key}_v2.mp4"
 
 
-def _purge_slug_proxies(slug: str) -> None:
+def _purge_slug_proxies(slug: str, keep: frozenset[Path] = frozenset()) -> None:
     """Remove any cached preview proxies for a slug (all file versions)."""
     PROXY_DIR.mkdir(parents=True, exist_ok=True)
-    for p in PROXY_DIR.glob(f"{glob.escape(slug)}*.mp4"):
-        p.unlink(missing_ok=True)
+    for pattern in (f"{glob.escape(slug)}*.mp4", f"{glob.escape(slug)}*_audio_*.m4a"):
+        for p in PROXY_DIR.glob(pattern):
+            if p not in keep:
+                p.unlink(missing_ok=True)
+
+
+def _current_cache_files(path: Path) -> list[Path]:
+    """The thumbnail and previews already made for this exact file version."""
+    proxy = _proxy_path(path)
+    found = [_thumb_path(path), proxy, *PROXY_DIR.glob(f"{glob.escape(proxy.stem)}_audio_*.m4a")]
+    return [p for p in found if p.exists()]
+
+
+def _audio_preview_path(path: Path, index: int) -> Path:
+    proxy = _proxy_path(path)
+    return proxy.with_name(f"{proxy.stem}_audio_{index}.m4a")
+
+
+async def _make_audio_preview(path: Path, index: int) -> Path:
+    """Browser-readable audio for one recorded stream, keeping its timeline."""
+    target = _audio_preview_path(path, index)
+    if target.exists() and target.stat().st_size > 0:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=".audio-", suffix=".m4a",
+                                     dir=target.parent, delete=False) as handle:
+        tmp = Path(handle.name)
+    proc = None
+    spawn = None
+    try:
+        spawn = asyncio.create_task(asyncio.create_subprocess_exec(
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-threads", "2",
+            "-i", str(path), "-map", f"0:a:{index}", "-vn",
+            "-af", "aresample=48000:async=1:first_pts=0", "-ac", "2",
+            "-c:a", "aac", "-b:a", "192k", "-threads", "2",
+            "-movflags", "+faststart", "-y", str(tmp),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        ))
+        proc = await asyncio.shield(spawn)
+        _, stderr = await communicate_with_timeout(proc, timeout=300)
+        if proc.returncode != 0 or tmp.stat().st_size == 0:
+            reason = (stderr or b"").decode(errors="replace").strip()[-300:]
+            raise RuntimeError(reason or "audio preview produced no output")
+        if _audio_preview_path(path, index) != target or not path.exists():
+            raise RuntimeError("clip changed while preparing its audio")
+        tmp.replace(target)
+        return target
+    finally:
+        if proc is None and spawn is not None:
+            try:
+                proc = await spawn
+            except OSError:
+                pass  # The spawn error is propagated by the main path.
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.communicate()
+        tmp.unlink(missing_ok=True)
 
 
 # WebEngine plays these without help; anything else gets an H.264 preview proxy.
@@ -390,7 +485,7 @@ async def _first_video_packet(path: Path) -> Optional[tuple[float, str]]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+        out, _ = await communicate_with_timeout(proc, timeout=60)
     except (asyncio.TimeoutError, OSError) as exc:
         log.debug("Packet probe of %s failed: %s", path.name, exc)
         return None
@@ -419,7 +514,7 @@ async def _decode_complaint(path: Path) -> Optional[str]:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        _, stderr = await communicate_with_timeout(proc, timeout=60)
     except (asyncio.TimeoutError, OSError) as exc:
         log.debug("Decode probe of %s failed: %s", path.name, exc)
         return None
@@ -458,6 +553,9 @@ async def _trim_result_problem(path: Path) -> str:
     return ""
 
 
+_PREVIEW_TIMEOUT = 300
+
+
 async def _make_preview_proxy(path: Path, vcodec: str) -> Optional[Path]:
     """Return an H.264 copy of *path* for in-app playback, transcoding once and
     caching it. Returns None when the source is already web-playable or the
@@ -474,9 +572,12 @@ async def _make_preview_proxy(path: Path, vcodec: str) -> Optional[Path]:
     # original file, which is what the trim endpoint actually cuts.
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-threads", "2", "-filter_threads", "1",
         "-i", str(path),
         "-map", "0:v:0?", "-map", "0:a?",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-threads:v", "2",
+        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "160k",
         "-movflags", "+faststart",
         # The temp name ends in .tmp, so name the container explicitly.
@@ -489,18 +590,21 @@ async def _make_preview_proxy(path: Path, vcodec: str) -> Optional[Path]:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
-        if proc.returncode != 0 or not tmp.exists():
+        _, stderr = await communicate_with_timeout(proc, timeout=_PREVIEW_TIMEOUT)
+        if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
             log.warning("preview proxy for %s failed: %s", path.name,
                         (stderr or b"").decode(errors="replace")[:200])
-            tmp.unlink(missing_ok=True)
             return None
-    except (asyncio.TimeoutError, OSError) as exc:
-        log.warning("preview proxy for %s errored: %s", path.name, exc)
-        tmp.unlink(missing_ok=True)
+        tmp.replace(proxy)
+        return proxy
+    except asyncio.TimeoutError:
+        log.warning("preview proxy for %s timed out after %ss", path.name, _PREVIEW_TIMEOUT)
         return None
-    tmp.replace(proxy)
-    return proxy
+    except OSError as exc:
+        log.warning("preview proxy for %s errored: %s", path.name, exc)
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -539,7 +643,7 @@ async def _remux_moov(path: Path) -> bool:
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.wait(), timeout=60)
+        await communicate_with_timeout(proc, timeout=60)
         if proc.returncode == 0 and tmp.exists():
             remuxed = await probe_media(tmp)
             orig_size = path.stat().st_size
@@ -560,10 +664,11 @@ async def _remux_moov(path: Path) -> bool:
             )
     except Exception as exc:
         log.warning("Remux of %s failed: %s", path.name, exc)
-    try:
-        tmp.unlink(missing_ok=True)
-    except Exception as exc:
-        log.debug("Could not remove the remux temp file %s: %s", tmp.name, exc)
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError as exc:
+            log.debug("Could not remove the remux temp file %s: %s", tmp.name, exc)
     return False
 
 
@@ -587,7 +692,7 @@ async def _ffprobe(path: Path) -> dict:
         # served as-is.
         return meta or _unreadable_meta(why)
     log.warning("ffprobe cannot read %s (%s), attempting moov remux",
-                path.name, why or "no reason from ffprobe")
+                path.name, why or "it reads, but reports no duration")
     if await _remux_moov(path):
         meta, why = await probe_media_detailed(path)
         log.info(
@@ -614,12 +719,18 @@ async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
     """
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     thumb = _thumb_path(path)
-    if thumb.exists():
+    if thumb.exists() and thumb.stat().st_size > 0:
         return thumb
     if duration and duration > 0:
         seek_ts = min(duration / 2.0, 0.75)
     else:
         seek_ts = 0.0
+    # Publish only complete images. Concurrent requests get separate temporary
+    # files, so cancellation cannot delete another request's finished thumbnail.
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{thumb.stem}.", suffix=".jpg", dir=THUMB_DIR, delete=False,
+    ) as handle:
+        tmp = Path(handle.name)
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-hide_banner", "-loglevel", "error",
@@ -628,26 +739,33 @@ async def _make_thumb(path: Path, duration: float = 0.0) -> Path:
             "-frames:v", "1",
             "-vf", "scale=640:-2",
             "-q:v", "4",
-            str(thumb),
+            "-y", str(tmp),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
-        await asyncio.wait_for(proc.wait(), timeout=20)
+        await communicate_with_timeout(proc, timeout=20)
+        if proc.returncode == 0 and tmp.stat().st_size > 0:
+            tmp.replace(thumb)
     except Exception as exc:
         log.debug("Thumbnail generation failed for %s: %s", path.name, exc)
+    finally:
+        tmp.unlink(missing_ok=True)
     return thumb
 
 
-# OpenGraph only, no twitter:card. twitter:player must point at an
-# embeddable HTML page, not a raw video file, and Discord does not iframe
-# arbitrary players anyway: when a player card is present and unusable,
-# Discord renders no embed at all (issues #77, #100). Plain og:video with
-# a direct file URL is the pattern working self-hosted sharers use.
+# Discord can use the Twitter player metadata to skip its thumbnailing pass
+# for direct video links. Keep the OpenGraph metadata as the fallback used by
+# other unfurlers (issues #77, #100, #207).
 _EMBED_PAGE = """\
 <!DOCTYPE html>
 <html><head>
   <meta charset="utf-8">
   <meta name="theme-color"              content="{color}">
+  <meta name="twitter:card"             content="player">
+  <meta name="twitter:player"           content="{video_url}">
+  <meta name="twitter:player:stream"    content="{video_url}">
+  <meta name="twitter:player:stream:content_type" content="{video_type}">
+  <meta name="twitter:image"            content="{thumb_url}">
   <meta property="og:site_name"         content="Vice">
   <meta property="og:type"              content="video.other">
   <meta property="og:url"               content="{page_url}">
@@ -678,6 +796,21 @@ _EMBED_PAGE = """\
 # pointed at Cloudflare's API, which answers "Method Not Allowed" (#143).
 _TRYCLOUDFLARE_RE = re.compile(r"https://([a-zA-Z0-9-]+)\.trycloudflare\.com")
 _NOT_A_TUNNEL = {"api", "www", "dash", "developers", "blog"}
+_TUNNEL_RETRY_INITIAL = 5.0
+_TUNNEL_RETRY_MAX = 300.0
+
+
+def _cloudflared_failure_detail(lines: list[str]) -> str:
+    """Return a short actionable cloudflared diagnostic from its output."""
+    relevant = [
+        line.strip()
+        for line in lines
+        if any(marker in line.lower() for marker in ("err", "error", "failed", "unable"))
+    ]
+    if not relevant:
+        return ""
+    detail = " | ".join(relevant[-3:])
+    return " ".join(detail.split())[:600]
 
 
 def _quick_tunnel_url(line: str) -> Optional[str]:
@@ -722,14 +855,20 @@ class ShareServer:
 
         self.playlists = PlaylistStore()
         self._views = _load_views()
+        self._share_tokens = _load_share_tokens()
+        self._share_slugs = {token: slug for slug, token in self._share_tokens.items()}
         self.editor_project = EditorProjectStore()
         self._exports = ExportManager(self.broadcast)
 
-        # One lock per proxy path so two opens of the same H.265 clip don't
-        # transcode it twice.
-        self._proxy_locks: dict[str, asyncio.Lock] = {}
+        # One encoder across the library. Different clips used to spawn
+        # independent encoders, each allocating its own frame queues (#193).
+        self._proxy_lock = asyncio.Lock()
+        self._proxy_tasks: set[asyncio.Task] = set()
+        self._proxy_stopping = False
 
         self._tunnel_proc: Optional[asyncio.subprocess.Process] = None
+        self._tunnel_task: Optional[asyncio.Task] = None
+        self._tunnel_stopping = False
         self._tunnel_url:  Optional[str] = None
         self._local_base_url: Optional[str] = None
         self._public_bind_url: Optional[str] = None
@@ -762,11 +901,11 @@ class ShareServer:
                       lambda req, k=_kind: self._ui_asset(req, kind=k))
 
         # Discord embed pages
-        r.add_get("/c/{slug}",    self._embed_page)
+        r.add_get("/c/{ref}",     self._embed_page)
 
         # Media
-        r.add_get("/v/{slug}",    self._video)
-        r.add_get("/t/{slug}",    self._thumb)
+        r.add_get("/v/{ref}",     self._video)
+        r.add_get("/t/{ref}",     self._thumb)
         # Images, local only. There is no share link for a screenshot, so
         # these have no counterpart on the public app below.
         r.add_get("/i/{slug}",    self._image_file)
@@ -782,6 +921,7 @@ class ShareServer:
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
         r.add_post("/api/clips/{slug}/frame",             self._api_save_frame)
+        r.add_get("/api/clips/{slug}/audio/{index}",      self._audio_track)
         r.add_get("/api/app-state",                       self._api_get_app_state)
         r.add_post("/api/app-state",                      self._api_set_app_state)
         r.add_post("/api/clips/{slug}/view",              self._api_view)
@@ -821,9 +961,9 @@ class ShareServer:
 
     def _setup_public_routes(self) -> None:
         r = self._public_app.router
-        r.add_get("/c/{slug}", self._embed_page)
-        r.add_get("/v/{slug}", self._video)
-        r.add_get("/t/{slug}", self._thumb)
+        r.add_get("/c/{ref}", self._public_embed_page)
+        r.add_get("/v/{ref}", self._public_video)
+        r.add_get("/t/{ref}", self._public_thumb)
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -834,6 +974,7 @@ class ShareServer:
             media = list(out_dir.glob("*.mp4")) + list(out_dir.glob("*.mkv"))
             for clip in sorted(media, key=lambda p: p.stat().st_mtime):
                 self._clips[clip.stem] = clip
+        self._ensure_share_tokens()
         self.rescan_images()
         # Both indexes in one call. backfill drops membership for anything not
         # in the set it is given, so handing it the clips alone would empty
@@ -889,17 +1030,25 @@ class ShareServer:
             await self._start_tunnel(public_port)
 
     async def stop(self) -> None:
+        self._proxy_stopping = True
+        tasks = list(self._proxy_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._exports.stop()
         for ws in list(self._ws_clients):
             try:
                 await ws.close()
             except Exception as exc:
                 log.debug("A websocket client did not close cleanly: %s", exc)
-        if self._tunnel_proc:
-            try:
-                self._tunnel_proc.terminate()
-                await asyncio.wait_for(self._tunnel_proc.wait(), timeout=5)
-            except Exception as exc:
-                log.debug("cloudflared did not stop cleanly: %s", exc)
+        self._tunnel_stopping = True
+        tunnel_task = getattr(self, "_tunnel_task", None)
+        if tunnel_task:
+            tunnel_task.cancel()
+            await asyncio.gather(tunnel_task, return_exceptions=True)
+            self._tunnel_task = None
+        elif getattr(self, "_tunnel_proc", None):
+            await self._stop_tunnel_process(self._tunnel_proc)
         if self._local_runner:
             await self._local_runner.cleanup()
         if self._public_runner:
@@ -913,9 +1062,11 @@ class ShareServer:
         self._clips[slug] = path
         self._meta.pop(slug, None)
         # A fresh recording under a reused clip number must not inherit the
-        # old clip's view count.
+        # old clip's view count, nor its link: anyone still holding the old
+        # one would be shown the new recording.
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
+        self._issue_share_token(slug)
         if (game and self.cfg.output.auto_playlist_by_game
                 and self.playlists.record_auto(game, slug)):
             asyncio.create_task(self._broadcast_playlists())
@@ -924,7 +1075,77 @@ class ShareServer:
             "clip": self._clip_json(slug, path, {}),
         }))
         asyncio.create_task(self._broadcast_clip(slug, path))
-        return f"{self.public_base_url()}/c/{quote(slug, safe='')}"
+        return self.share_url(slug)
+
+    # ── share tokens ──────────────────────────────────────────────────────────
+
+    def _new_share_token(self) -> str:
+        token = secrets.token_urlsafe(9)
+        while token in self._share_slugs:
+            token = secrets.token_urlsafe(9)
+        return token
+
+    def _ensure_share_tokens(self) -> None:
+        """Give every clip in the library a token, in one write.
+
+        Tokens for clips that are missing are kept, not pruned: a clips folder
+        on a drive that is not mounted yet would otherwise lose every link.
+        A recording that reuses a clip number gets a fresh token in add_clip,
+        which is the case that matters.
+        """
+        missing = [slug for slug in self._clips if slug not in self._share_tokens]
+        for slug in missing:
+            token = self._new_share_token()
+            self._share_tokens[slug] = token
+            self._share_slugs[token] = slug
+        if missing:
+            _save_share_tokens(self._share_tokens)
+
+    def _issue_share_token(self, slug: str) -> str:
+        """Give *slug* a new token, retiring any link it had before."""
+        old = self._share_tokens.get(slug)
+        if old is not None:
+            self._share_slugs.pop(old, None)
+        token = self._new_share_token()
+        self._share_tokens[slug] = token
+        self._share_slugs[token] = slug
+        _save_share_tokens(self._share_tokens)
+        return token
+
+    def _move_share_token(self, slug: str, new_slug: str) -> None:
+        """Keep a shared link working when its clip is renamed."""
+        token = self._share_tokens.pop(slug, None)
+        if token is None:
+            return
+        stale = self._share_tokens.get(new_slug)
+        if stale is not None:
+            self._share_slugs.pop(stale, None)
+        self._share_tokens[new_slug] = token
+        self._share_slugs[token] = new_slug
+        _save_share_tokens(self._share_tokens)
+
+    def _forget_share_token(self, slug: str) -> None:
+        token = self._share_tokens.pop(slug, None)
+        if token is not None:
+            self._share_slugs.pop(token, None)
+            _save_share_tokens(self._share_tokens)
+
+    def share_url(self, slug: str) -> str:
+        base = self.public_base_url() or self.local_base_url() or ""
+        token = self._share_tokens.get(slug) or self._issue_share_token(slug)
+        return f"{base}/c/{token}"
+
+    def _slug_for_ref(self, ref: str, *, allow_slug: bool) -> Optional[str]:
+        """The clip a URL segment names, or None.
+
+        The public server resolves tokens only. The local server keeps
+        accepting slugs, which is what the app itself uses, and also takes
+        tokens so a share link that fell back to the local address still
+        opens on this machine.
+        """
+        if allow_slug and ref in self._clips:
+            return ref
+        return self._share_slugs.get(ref)
 
     def local_base_url(self) -> Optional[str]:
         return self._local_base_url
@@ -938,6 +1159,17 @@ class ShareServer:
         """Whether share links work outside the local network. False means we
         fell back to a LAN address because there is no tunnel (#105)."""
         return bool(self.cfg.sharing.base_url or self._tunnel_url)
+
+    def _share_links_update(self) -> dict:
+        return {
+            "type": "share_links_changed",
+            "links": {slug: self.share_url(slug) for slug in self._clips},
+            "share_is_public": self.public_is_reachable(),
+        }
+
+    async def _broadcast_share_links(self) -> None:
+        if self._clips:
+            await self.broadcast(self._share_links_update())
 
     async def broadcast(self, msg: dict) -> None:
         if not self._ws_clients:
@@ -971,7 +1203,6 @@ class ShareServer:
         return self._meta[slug]
 
     def _clip_json(self, slug: str, path: Path, meta: dict) -> dict:
-        public_base = self.public_base_url() or self.local_base_url() or ""
         try:
             st = path.stat()
             size = st.st_size
@@ -998,6 +1229,7 @@ class ShareServer:
             # Lets the UI request an H.264 preview proxy for codecs the native
             # WebEngine can't decode (H.265).
             "vcodec":     meta.get("vcodec",   ""),
+            "audio_tracks": meta.get("audio_tracks", []),
             # ffmpeg cannot read this file. It is still listed, because it is
             # the user's recording and may be recoverable by hand, but the
             # card says so instead of showing a 0:00 clip that will not play.
@@ -1005,7 +1237,7 @@ class ShareServer:
             "unreadable_reason": meta.get("unreadable_reason", ""),
             # Keep share links public, but serve media via local relative URLs
             # so the app UI never fetches video through an external tunnel.
-            "share_url":  f"{public_base}/c/{enc}",
+            "share_url":  self.share_url(slug),
             "share_is_public": self.public_is_reachable(),
             # Cache-bust media URLs by clip file identity: deleted clip numbers
             # get reused (Vice_Clip_5 can name a brand-new file), and a trim
@@ -1146,10 +1378,21 @@ class ShareServer:
         )
 
     async def _embed_page(self, req: web.Request) -> web.Response:
-        slug = req.match_info["slug"]
-        path = self._clips.get(slug)
+        return await self._serve_embed_page(req, public=False)
+
+    async def _public_embed_page(self, req: web.Request) -> web.Response:
+        return await self._serve_embed_page(req, public=True)
+
+    def _clip_for_ref(self, ref: str, *, public: bool) -> tuple[str, Path]:
+        slug = self._slug_for_ref(ref, allow_slug=not public)
+        path = self._clips.get(slug) if slug else None
         if not path or not path.exists():
             raise web.HTTPNotFound()
+        return slug, path
+
+    async def _serve_embed_page(self, req: web.Request, *, public: bool) -> web.Response:
+        ref = req.match_info["ref"]
+        slug, path = self._clip_for_ref(ref, public=public)
         meta = await self._get_meta(slug, path)
         # cloudflared terminates TLS and forwards plain HTTP, so req.scheme
         # is "http" even when the visitor came in over https. Discord and
@@ -1160,7 +1403,9 @@ class ShareServer:
         # Direct file URL with the real container suffix; some unfurlers
         # sniff the extension. _video strips it back off.
         suffix = path.suffix.lower() or ".mp4"
-        enc = quote(slug, safe="")
+        # The media links reuse whatever named the page, so a page reached by
+        # token never hands out the filename that would lead to other clips.
+        enc = quote(ref, safe="")
         page = _EMBED_PAGE.format(
             title=html.escape(f"Vice clip, {slug}", quote=True),
             page_url=f"{base}/c/{enc}",
@@ -1181,20 +1426,28 @@ class ShareServer:
         return "#0099ff"
 
     async def _video(self, req: web.Request) -> web.Response:
-        slug = req.match_info["slug"]
-        path = self._clips.get(slug)
-        if path is None and slug.lower().endswith((".mp4", ".mkv")):
+        return await self._serve_video(req, public=False)
+
+    async def _public_video(self, req: web.Request) -> web.Response:
+        return await self._serve_video(req, public=True)
+
+    async def _serve_video(self, req: web.Request, *, public: bool) -> web.Response:
+        ref = req.match_info["ref"]
+        slug = self._slug_for_ref(ref, allow_slug=not public)
+        if slug is None and ref.lower().endswith((".mp4", ".mkv")):
             # Embed pages link the file with its container suffix. Exact
             # match first so slugs that themselves contain dots keep working.
-            path = self._clips.get(slug.rsplit(".", 1)[0])
+            slug = self._slug_for_ref(ref.rsplit(".", 1)[0], allow_slug=not public)
+        path = self._clips.get(slug) if slug else None
         if not path or not path.exists():
             raise web.HTTPNotFound()
 
         # The UI asks for proxy=1 when the clip's codec (H.265) can't play in
         # the native WebEngine. Serve a cached H.264 copy instead; the original
         # is never touched. Falls through to the source if it's already
-        # web-playable or the transcode fails.
-        if req.query.get("proxy") == "1":
+        # web-playable or the transcode fails. Local only: over a share link
+        # it would let a stranger make this machine transcode on request.
+        if not public and req.query.get("proxy") == "1":
             served = await self._serve_preview_proxy(slug, path)
             if served is not None:
                 return served
@@ -1217,11 +1470,18 @@ class ShareServer:
     async def _serve_preview_proxy(self, slug: str, path: Path):
         """Return a FileResponse for the clip's H.264 preview proxy, or None to
         fall back to serving the original."""
-        proxy_key = str(_proxy_path(path))
-        lock = self._proxy_locks.setdefault(proxy_key, asyncio.Lock())
-        async with lock:
-            meta = await self._get_meta(slug, path)
-            proxy = await _make_preview_proxy(path, meta.get("vcodec", ""))
+        if self._proxy_stopping:
+            raise web.HTTPServiceUnavailable()
+        task = asyncio.current_task()
+        self._proxy_tasks.add(task)
+        try:
+            proxy = _proxy_path(path)
+            if not proxy.exists() or proxy.stat().st_size == 0:
+                async with self._proxy_lock:
+                    meta = await self._get_meta(slug, path)
+                    proxy = await _make_preview_proxy(path, meta.get("vcodec", ""))
+        finally:
+            self._proxy_tasks.discard(task)
         if proxy is None or not proxy.exists():
             return None
         return web.FileResponse(
@@ -1233,14 +1493,45 @@ class ShareServer:
             },
         )
 
-    async def _thumb(self, req: web.Request) -> web.Response:
+    async def _audio_track(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
         path = self._clips.get(slug)
-        if not path or not path.exists():
+        raw_index = req.match_info["index"]
+        if not path or not path.exists() or not re.fullmatch(r"[0-9]{1,4}", raw_index):
             raise web.HTTPNotFound()
+        index = int(raw_index)
+        meta = await self._get_meta(slug, path)
+        if index >= meta.get("audio_streams", 0):
+            raise web.HTTPNotFound()
+        if self._proxy_stopping:
+            raise web.HTTPServiceUnavailable()
+        task = asyncio.current_task()
+        self._proxy_tasks.add(task)
+        try:
+            target = _audio_preview_path(path, index)
+            if not target.exists() or target.stat().st_size == 0:
+                async with self._proxy_lock:
+                    target = await _make_audio_preview(path, index)
+        except (OSError, RuntimeError, asyncio.TimeoutError) as exc:
+            log.warning("Audio preview failed for %s track %d: %s", slug, index, exc)
+            raise web.HTTPServiceUnavailable(text="Could not prepare this audio track") from exc
+        finally:
+            self._proxy_tasks.discard(task)
+        return web.FileResponse(target, headers={
+            "Content-Type": "audio/mp4", "Accept-Ranges": "bytes", "Cache-Control": "no-cache",
+        })
+
+    async def _thumb(self, req: web.Request) -> web.Response:
+        return await self._serve_thumb(req, public=False)
+
+    async def _public_thumb(self, req: web.Request) -> web.Response:
+        return await self._serve_thumb(req, public=True)
+
+    async def _serve_thumb(self, req: web.Request, *, public: bool) -> web.Response:
+        slug, path = self._clip_for_ref(req.match_info["ref"], public=public)
         meta = await self._get_meta(slug, path)
         t = await _make_thumb(path, duration=meta.get("duration", 0))
-        if not t.exists():
+        if not t.exists() or t.stat().st_size == 0:
             raise web.HTTPNotFound()
         return web.FileResponse(t, headers={"Content-Type": "image/jpeg"})
 
@@ -1259,7 +1550,8 @@ class ShareServer:
 
         sem = asyncio.Semaphore(3)
         async def _ensure(slug: str, path: Path) -> None:
-            if _thumb_path(path).exists():
+            thumb = _thumb_path(path)
+            if thumb.exists() and thumb.stat().st_size > 0:
                 return
             async with sem:
                 await _make_thumb(path, duration=metas[slug].get("duration", 0))
@@ -1290,6 +1582,7 @@ class ShareServer:
         self._meta.pop(slug, None)
         if self._views.pop(slug, None) is not None:
             _save_views(self._views)
+        self._forget_share_token(slug)
         if self.playlists.on_clip_deleted(slug):
             await self._broadcast_playlists()
         if self.editor_project.on_clip_deleted(slug):
@@ -1336,7 +1629,7 @@ class ShareServer:
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+                _, stderr = await communicate_with_timeout(proc, timeout=timeout)
                 return proc.returncode == 0, (stderr or b"").decode()[:300]
             except asyncio.TimeoutError:
                 return False, "ffmpeg timed out"
@@ -1411,14 +1704,24 @@ class ShareServer:
         if new_path.exists() and new_path != path:
             return web.json_response({"ok": False, "error": "A clip with that name already exists"})
 
+        # A rename keeps the file's size and modification time, so the cached
+        # thumbnail and previews are still valid. Purging them made an H.265
+        # clip transcode its preview again after every rename (#226).
+        cached = frozenset(_current_cache_files(path))
+        old_stem = path.stem
         path.rename(new_path)
         new_slug = new_path.stem
 
         # Update internal state
         self._clips.pop(slug, None)
         self._clips[new_slug] = new_path
-        _purge_slug_thumbs(slug)
-        _purge_slug_proxies(slug)
+        _purge_slug_thumbs(slug, keep=cached)
+        _purge_slug_proxies(slug, keep=cached)
+        for old in cached:
+            try:
+                old.replace(old.with_name(new_slug + old.name[len(old_stem):]))
+            except OSError as exc:
+                log.debug("Could not carry %s across the rename: %s", old.name, exc)
         self._meta.pop(slug, None)
 
         # Rename highlights file if it exists
@@ -1436,6 +1739,7 @@ class ShareServer:
         if slug in self._views:
             self._views[new_slug] = self._views.pop(slug)
             _save_views(self._views)
+        self._move_share_token(slug, new_slug)
 
         # Tell the UI: old card gone, new card appears
         await self.broadcast({"type": "clip_deleted", "slug": slug})
@@ -1676,7 +1980,7 @@ class ShareServer:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            _, stderr = await communicate_with_timeout(proc, timeout=60)
         except asyncio.TimeoutError:
             out.unlink(missing_ok=True)
             return web.json_response({"ok": False, "error": "ffmpeg timed out reading that frame"})
@@ -1882,6 +2186,7 @@ class ShareServer:
                 width=meta.get("width", 0),
                 height=meta.get("height", 0),
                 has_audio=meta.get("audio_streams", 0) > 0,
+                audio_streams=meta.get("audio_streams", 0),
             )
         return sources
 
@@ -2263,40 +2568,96 @@ class ShareServer:
             )
             return
         log.info("Starting Cloudflare Tunnel on port %d", port)
-        try:
-            self._tunnel_proc = await asyncio.create_subprocess_exec(
-                "cloudflared", "tunnel", "--url", f"http://localhost:{port}",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-        except OSError as exc:
-            await self._tunnel_failed(f"cloudflared failed to start: {exc}")
+        if self._tunnel_task and not self._tunnel_task.done():
             return
-        asyncio.create_task(self._read_cloudflare_url())
+        self._tunnel_stopping = False
+        self._tunnel_task = asyncio.create_task(self._run_tunnel(port))
+
+    async def _run_tunnel(self, port: int) -> None:
+        delay = _TUNNEL_RETRY_INITIAL
+        while not self._tunnel_stopping:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "cloudflared", "tunnel", "--url", f"http://localhost:{port}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+            except OSError as exc:
+                await self._tunnel_failed(f"cloudflared failed to start: {exc}")
+                connected = False
+            else:
+                self._tunnel_proc = proc
+                try:
+                    _, connected = await self._read_cloudflare_url(proc)
+                except asyncio.CancelledError:
+                    await self._stop_tunnel_process(proc)
+                    raise
+                finally:
+                    if self._tunnel_proc is proc:
+                        self._tunnel_proc = None
+
+            if self._tunnel_stopping:
+                return
+            if connected:
+                delay = _TUNNEL_RETRY_INITIAL
+            log.warning("Retrying Cloudflare Tunnel in %.0f seconds", delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, _TUNNEL_RETRY_MAX)
+
+    @staticmethod
+    async def _stop_tunnel_process(proc: asyncio.subprocess.Process) -> None:
+        if proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except ProcessLookupError:
+            return
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                return
+            await proc.wait()
 
     async def _tunnel_failed(self, reason: str) -> None:
         log.error("Public share tunnel unavailable: %s", reason)
         self._tunnel_url = None
         await self.broadcast({"type": "tunnel_error", "error": reason})
+        await self._broadcast_share_links()
 
-    async def _read_cloudflare_url(self) -> None:
-        assert self._tunnel_proc and self._tunnel_proc.stdout
-        proc = self._tunnel_proc
+    async def _read_cloudflare_url(
+        self, proc: Optional[asyncio.subprocess.Process] = None,
+    ) -> tuple[str, bool]:
+        proc = proc or self._tunnel_proc
+        assert proc and proc.stdout
+        diagnostics: list[str] = []
+        connected = False
         async for raw in proc.stdout:
+            line = raw.decode(errors="replace").strip()
             # Keep draining stdout after the URL so process exit is still
             # detected.
-            if self._tunnel_url is not None:
-                continue
-            url = _quick_tunnel_url(raw.decode(errors="replace"))
+            url = _quick_tunnel_url(line) if self._tunnel_url is None else None
             if url:
                 self._tunnel_url = url
+                connected = True
                 log.info("Cloudflare Tunnel URL: %s", self._tunnel_url)
                 await self.broadcast({"type": "tunnel_url", "url": self._tunnel_url})
-        # stdout closed: cloudflared exited. If that happened before a URL
-        # was ever printed, surface it instead of leaving the UI waiting.
-        if self._tunnel_url is None and proc is self._tunnel_proc:
-            rc = proc.returncode if proc.returncode is not None else await proc.wait()
-            await self._tunnel_failed(
-                f"cloudflared exited (code {rc}) before providing a tunnel URL. "
-                "Check your network or run it manually to see the error."
-            )
+                await self._broadcast_share_links()
+            if not url and line and any(
+                marker in line.lower() for marker in ("err", "error", "failed", "unable")
+            ):
+                diagnostics.append(line[-600:])
+                diagnostics = diagnostics[-20:]
+
+        rc = proc.returncode if proc.returncode is not None else await proc.wait()
+        if connected:
+            reason = f"cloudflared exited (code {rc}) after providing a tunnel URL"
+        else:
+            reason = f"cloudflared exited (code {rc}) before providing a tunnel URL"
+        detail = _cloudflared_failure_detail(diagnostics)
+        if detail:
+            reason += f": {detail}"
+        if proc is self._tunnel_proc:
+            await self._tunnel_failed(reason)
+        return reason, connected

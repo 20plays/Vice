@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import fcntl
 import os
 import pwd
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import time
@@ -21,7 +23,61 @@ RUNTIME_ENV_KEYS = (
     "DBUS_SESSION_BUS_ADDRESS",
     "XDG_SESSION_TYPE",
     "XDG_CURRENT_DESKTOP",
+    # The X session's cookie. Without it gpu-screen-recorder is refused by X,
+    # gives up on X11 and fails with "failed to create window" (#231).
+    "XAUTHORITY",
 )
+
+
+def daemon_is_running(socket_file: Path, pid_file: Path) -> bool:
+    """Conservatively detect an owner, including a busy or stopping daemon."""
+    try:
+        pid = int(pid_file.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        pid = 0
+    except OSError as exc:
+        log.warning("Cannot inspect daemon PID file %s: %s", pid_file, exc)
+        return True
+    if pid > 0:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            return True
+
+    # A status timeout says nothing about ownership. A listening Unix socket
+    # can accept connections while its daemon is busy finalizing a clip.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.2)
+        try:
+            probe.connect(str(socket_file))
+        except (FileNotFoundError, ConnectionRefusedError):
+            return False
+        except OSError as exc:
+            log.debug("Cannot rule out a daemon at %s: %s", socket_file, exc)
+        return True
+
+
+def claim_daemon_lock(socket_file: Path, timeout: float = 0.0):
+    """Hold the returned file open for the daemon's whole lifetime."""
+    lock_file = socket_file.with_suffix(".lock")
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_file.open("a+")
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return handle
+            except BlockingIOError as exc:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("Vice is already starting or running.") from exc
+                time.sleep(0.05)
+    except BaseException:
+        handle.close()
+        raise
 
 
 def actual_home_dir() -> Path:
@@ -68,11 +124,18 @@ def user_systemd_env_snapshot() -> dict[str, str]:
     return values
 
 
-def load_user_systemd_env() -> None:
-    """Hydrate graphical session vars from the user systemd manager when needed."""
+def load_user_systemd_env() -> list[str]:
+    """Hydrate graphical session vars from the user systemd manager when needed.
+
+    Only fills what is missing or unexpanded, never replaces a working value.
+    Returns the keys it set.
+    """
+    filled = []
     for key, value in user_systemd_env_snapshot().items():
         if not os.environ.get(key) or _needs_shell_expansion(os.environ.get(key)):
             os.environ[key] = value
+            filled.append(key)
+    return filled
 
 
 def has_display() -> bool:
