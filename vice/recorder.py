@@ -1051,6 +1051,12 @@ def _gsr_progress_line(line: str) -> bool:
 
 def _gsr_runtime_error(raw: str) -> Optional[str]:
     lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    # X answered but refused the connection. GSR then assumes there is no X
+    # server, fails on Wayland, and its last word is "failed to create
+    # window", which hides the cause entirely (#231).
+    if any("authorization required" in line.lower() for line in lines):
+        return ("the X session refused gpu-screen-recorder (authorization "
+                "required), so XAUTHORITY is missing or out of date")
     for line in reversed(lines):
         lowered = line.lower()
         if lowered.startswith(("gsr error:", "error:", "gpu-screen-recorder:")):

@@ -56,6 +56,7 @@ from .runtime import (
     resolve_path,
     has_display,
     installed_version,
+    load_user_systemd_env,
     runtime_env_snapshot,
     running_under_systemd,
     systemd_unit_loaded,
@@ -591,6 +592,15 @@ class ViceDaemon:
                 backoff = min(backoff * 2, 300.0)
                 last_wall = time.time()
                 continue
+
+            # A daemon started at boot can come up before the desktop has
+            # exported its session, and a restart would otherwise reuse that
+            # environment forever. Plasma's XAUTHORITY was the one missing in
+            # #231: every retry failed until a manual restart picked it up.
+            filled = await asyncio.to_thread(load_user_systemd_env)
+            if filled:
+                log.info("Picked up %s from the session before restarting the recorder",
+                         ", ".join(filled))
 
             try:
                 async with self._config_apply_lock:
