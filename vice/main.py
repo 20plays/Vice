@@ -56,6 +56,7 @@ from .runtime import (
     resolve_path,
     has_display,
     installed_version,
+    load_user_systemd_env,
     runtime_env_snapshot,
     running_under_systemd,
     systemd_unit_loaded,
@@ -460,6 +461,7 @@ class ViceDaemon:
                 "recorder_error": self._recorder_error,
                 "cpu_fallback": bool(getattr(self.recorder, "cpu_fallback", False)),
                 "codec_fallback": bool(getattr(self.recorder, "codec_fallback", False)),
+                "disk": self._disk_stats(),
             })
         )
 
@@ -590,6 +592,15 @@ class ViceDaemon:
                 backoff = min(backoff * 2, 300.0)
                 last_wall = time.time()
                 continue
+
+            # A daemon started at boot can come up before the desktop has
+            # exported its session, and a restart would otherwise reuse that
+            # environment forever. Plasma's XAUTHORITY was the one missing in
+            # #231: every retry failed until a manual restart picked it up.
+            filled = await asyncio.to_thread(load_user_systemd_env)
+            if filled:
+                log.info("Picked up %s from the session before restarting the recorder",
+                         ", ".join(filled))
 
             try:
                 async with self._config_apply_lock:
@@ -1066,6 +1077,20 @@ class ViceDaemon:
         bundled = [(g["name"], g.get("matches")) for g in _DEFAULT_GAMES]
         return _best_game_match(custom, haystacks) or _best_game_match(bundled, haystacks)
 
+    def _disk_stats(self) -> Optional[dict]:
+        """Free space where clips land, for the Home readout.
+
+        A recorder that quietly runs out of room is the failure this is here to
+        make visible, so a drive that cannot be measured reports nothing rather
+        than a zero that would read as full.
+        """
+        try:
+            usage = shutil.disk_usage(resolve_path(self.cfg.output.directory))
+        except OSError as exc:
+            log.debug("Could not measure free space: %s", exc)
+            return None
+        return {"free": usage.free, "total": usage.total}
+
     def _get_status(self) -> dict:
         return {
             "ready":          self._ready,
@@ -1078,6 +1103,7 @@ class ViceDaemon:
             "session_active":   self._session_active,
             "clip_key":         self.cfg.hotkeys.clip,
             "hotkeys_available": self.hotkeys_available,
+            "disk":             self._disk_stats(),
             # None unless a newer release is known, so a UI opened long after
             # the check still learns about it.
             "update":           self._update,
@@ -1089,6 +1115,8 @@ class ViceDaemon:
         """How this machine should update, so the notice can say it exactly."""
         if _installed_via_aur():
             return {"method": "aur", "command": "yay -Syu vice-clipper"}
+        if _installed_via_nix():
+            return {"method": "nix", "command": "nix flake update vice && sudo nixos-rebuild switch"}
         if _using_install_script_venv():
             return {"method": "script", "command": "cd Vice && git pull && ./install.sh"}
         return {"method": "unknown", "command": ""}
@@ -1484,6 +1512,11 @@ def _installed_via_aur() -> bool:
     if owner.returncode != 0:
         return False
     return "vice-clipper" in owner.stdout
+
+
+def _installed_via_nix() -> bool:
+    vice_path = _vice_command_path()
+    return vice_path is not None and str(vice_path).startswith("/nix/store/")
 
 
 def _using_install_script_venv() -> bool:
@@ -1967,6 +2000,11 @@ def uninstall(yes: bool) -> None:
     if _installed_via_aur():
         click.echo("Vice was installed via AUR.")
         click.echo("Run: yay -Rns vice-clipper")
+        return
+
+    if _installed_via_nix():
+        click.echo("Vice is installed by Nix and cannot remove itself.")
+        click.echo("Drop services.vice.enable (or the package) and rebuild.")
         return
 
     # 1. Stop daemon

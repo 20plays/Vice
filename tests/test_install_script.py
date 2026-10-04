@@ -1,6 +1,8 @@
+import importlib
 import re
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -15,10 +17,10 @@ class InstallScriptTests(unittest.TestCase):
     def test_gsr_source_build_uses_pinned_refs_and_override(self) -> None:
         script = self.script
 
-        self.assertIn('GSR_DEFAULT_REF="5.13.3"', script)
-        self.assertIn('GSR_FFMPEG6_REF="5.12.5"', script)
+        self.assertIn('GSR_DEFAULT_REF="6.1.3"', script)
+        self.assertIn('GSR_FFMPEG4_REF="5.12.5"', script)
         self.assertIn('VICE_GSR_REF:-', script)
-        self.assertIn("major < 59", script)
+        self.assertIn("major < 57", script)
         self.assertIn('_gsr_fetch_source "$gsr_ref" "$tmpdir"', script)
         self.assertIn('git clone --depth 1 --branch "$ref" "$GSR_REPO_URL" "$dest"', script)
 
@@ -50,6 +52,46 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn("Silverblue", script)
         self.assertIn("dnf is not the right install path", script)
         self.assertLess(script.index("if is_rpm_ostree_system; then"), script.index("detect_package_manager()"))
+
+    def test_arch_qt_preflight_preserves_existing_install(self) -> None:
+        """A failed Arch Qt preflight must not remove a working install."""
+        install_venv = re.search(
+            r"install_vice_venv\(\) \{\n(?P<body>.*?)\n\}",
+            self.script,
+            flags=re.S,
+        )
+        self.assertIsNotNone(install_venv)
+        body = install_venv.group("body")
+
+        qt_check = body.index("import PyQt6.QtWebEngineWidgets, qtpy")
+        cleanup = body.index("clean_previous_local_install")
+        remove_venv = body.index('rm -rf "$VENV_DIR"')
+        create_venv = body.index('"$python_bin" -m venv')
+
+        self.assertLess(qt_check, cleanup)
+        self.assertLess(cleanup, remove_venv)
+        self.assertLess(remove_venv, create_venv)
+        self.assertEqual(self.script.count('rm -rf "$VENV_DIR"'), 1)
+
+    def test_missing_optional_parent_is_reported_as_missing(self) -> None:
+        """find_spec imports dotted-name parents and may raise if one is absent."""
+        helper = re.search(
+            r"^def _missing\(deps\):\n.*?^    return missing$",
+            self.script,
+            flags=re.M | re.S,
+        )
+        self.assertIsNotNone(helper)
+
+        namespace = {"importlib": importlib}
+        exec(helper.group(0), namespace)
+        dependency = {"PyQt6.QtWebEngineWidgets": "PyQt6-WebEngine>=6.5"}
+        missing_parent = ModuleNotFoundError("No module named 'PyQt6'")
+
+        with mock.patch.object(importlib.util, "find_spec", side_effect=missing_parent):
+            self.assertEqual(
+                namespace["_missing"](dependency),
+                ["PyQt6-WebEngine>=6.5"],
+            )
 
     def test_gsr_build_runs_as_user_with_sudo_only_for_install(self) -> None:
         """Regression test for #84: building under sudo left a root-owned
@@ -266,3 +308,76 @@ class PackagingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GsrUpgradeTests(unittest.TestCase):
+    """Rerunning install.sh has to bring an old source-built gpu-screen-recorder
+    up to date: 6.1.2 hardened its privileged helper, and 5.13.3 wrote broken
+    MP4s on Debian 13 (#154). A packaged one is its package manager's job."""
+
+    FUNCTIONS = ("_gsr_libavutil_major", "_gsr_select_ref", "_gsr_installed_version",
+                 "_version_lt", "_gsr_owned_by_package", "install_gpu_screen_recorder")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        script = INSTALL_SH.read_text()
+        parts = [re.search(r"^GSR_DEFAULT_REF=.*$", script, re.M).group(0),
+                 re.search(r"^GSR_FFMPEG4_REF=.*$", script, re.M).group(0)]
+        for name in cls.FUNCTIONS:
+            match = re.search(rf"^{name}\(\) \{{\n.*?^\}}$", script, re.S | re.M)
+            assert match, name
+            parts.append(match.group(0))
+        cls.functions = "\n".join(parts)
+
+    def _run(self, *, installed: str, libavutil: str = "59.39.100", packaged: bool = False):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = Path(tmp)
+            fakes = {
+                "gpu-screen-recorder": f"echo '{installed}'",
+                "pkg-config": f"echo '{libavutil}'",
+                "dpkg": "exit 0" if packaged else "exit 1",
+            }
+            for name, body in fakes.items():
+                path = bin_dir / name
+                path.write_text(f"#!/bin/sh\n{body}\n")
+                path.chmod(0o755)
+            harness = (
+                "info() { echo \"INFO $*\"; }\nwarn() { echo \"WARN $*\"; }\n"
+                "error() { echo \"ERROR $*\"; }\n"
+                "_gsr_build_from_source() { echo BUILD; }\n"
+                f"{self.functions}\nPKG=apt\ninstall_gpu_screen_recorder\n"
+            )
+            result = subprocess.run(
+                ["bash", "-c", harness], capture_output=True, text=True, timeout=10,
+                env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_an_old_source_build_is_rebuilt_at_the_pinned_tag(self) -> None:
+        out = self._run(installed="5.13.3")
+        self.assertIn("updating it to 6.1.3", out)
+        self.assertIn("BUILD", out)
+
+    def test_a_packaged_old_version_is_left_to_its_package_manager(self) -> None:
+        out = self._run(installed="5.13.3", packaged=True)
+        self.assertNotIn("BUILD", out)
+        self.assertIn("security issue", out)
+
+    def test_a_current_install_is_left_alone(self) -> None:
+        for installed in ("6.1.3", "6.1.10"):
+            out = self._run(installed=installed)
+            self.assertNotIn("BUILD", out, installed)
+            self.assertIn("already installed", out)
+
+    def test_an_unreadable_version_changes_nothing(self) -> None:
+        out = self._run(installed="")
+        self.assertNotIn("BUILD", out)
+        self.assertNotIn("WARN", out)
+
+    def test_ffmpeg_4_keeps_the_last_tag_that_builds_there(self) -> None:
+        # Ubuntu 22.04: 6.1.3 fails to compile against FFmpeg 4.4.
+        out = self._run(installed="5.12.5", libavutil="56.70.100")
+        self.assertNotIn("BUILD", out)

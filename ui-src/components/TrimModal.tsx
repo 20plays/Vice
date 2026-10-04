@@ -57,6 +57,10 @@ export function TrimModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState(false);
+  // Held until the dialog closes. Renaming the file straight away swapped the
+  // clip under the dialog, which threw the selection away and, for an H.265
+  // clip, made the preview transcode all over again (#226).
+  const [pendingName, setPendingName] = useState<string | null>(null);
   const failed = useVideoFailure(videoRef);
 
   // Preview state is read inside a media event handler, so it needs a ref as
@@ -66,7 +70,13 @@ export function TrimModal({
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
 
-  useEscape(clip !== null, onClose);
+  const close = () => {
+    if (clip && pendingName && pendingName !== clipTitle(clip)) onRename(clip, pendingName);
+    setPendingName(null);
+    onClose();
+  };
+
+  useEscape(clip !== null, close);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -78,6 +88,7 @@ export function TrimModal({
     setSaving(false);
     setError(null);
     setPreparing(clipNeedsProxy(clip));
+    setPendingName(null);
     video.src = playbackUrl(clip);
     video.load();
     return () => {
@@ -164,8 +175,8 @@ export function TrimModal({
     setError(null);
     try {
       await api.trimClip(clip.slug, selection.start, selection.end);
-      notify(t('trim.saved'), clipTitle(clip), 'accent');
-      onClose();
+      notify(t('trim.saved'), pendingName ?? clipTitle(clip), 'accent');
+      close();
       await onSaved();
     } catch (err) {
       const message = (err as Error).message || t('trim.failed');
@@ -180,7 +191,7 @@ export function TrimModal({
   const endPct = pct(selection.end);
 
   return (
-    <div className="scrim" onMouseDown={e => e.target === e.currentTarget && onClose()}>
+    <div className="scrim" onMouseDown={e => e.target === e.currentTarget && close()}>
       <div
         className="modal trim-modal"
         role="dialog"
@@ -196,11 +207,11 @@ export function TrimModal({
               <InlineRename
                 className="trim-rename"
                 label={t('card.nameLabel')}
-                initial={clipTitle(clip)}
+                initial={pendingName ?? clipTitle(clip)}
                 onCancel={() => setRenamingTitle(false)}
                 onSubmit={name => {
                   setRenamingTitle(false);
-                  onRename(clip, name);
+                  setPendingName(name);
                 }}
               />
             ) : (
@@ -208,11 +219,11 @@ export function TrimModal({
                 className="trim-head-name"
                 title={t('viewer.doubleClickRename')}
                 onDoubleClick={() => setRenamingTitle(true)}>
-                {clipTitle(clip)}
+                {pendingName ?? clipTitle(clip)}
               </span>
             )}
           </h2>
-          <button type="button" className="modal-close" onClick={onClose} aria-label={t('common.close')}>
+          <button type="button" className="modal-close" onClick={close} aria-label={t('common.close')}>
             <IconClose size={15} />
           </button>
         </div>
@@ -330,7 +341,7 @@ export function TrimModal({
           <span className="trim-status">
             {error ?? t('trim.loopHelp')}
           </span>
-          <button type="button" className="btn btn-quiet btn-sm" onClick={onClose}>
+          <button type="button" className="btn btn-quiet btn-sm" onClick={close}>
             {t('common.cancel')}
           </button>
           <button type="button" className="btn btn-sm" onClick={() => void save()} disabled={saving || !total}>
