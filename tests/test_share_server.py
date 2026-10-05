@@ -750,6 +750,70 @@ class ShareServerCopyFileTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("wl-clipboard", body["error"])
 
 
+    async def _copy_discord(self, server, *, prepared=None, raises=None):
+        spawned: dict = {}
+
+        async def _fake_exec(*cmd, **kwargs):
+            proc = mock.MagicMock()
+            proc.stdin = mock.MagicMock()
+            proc.stdin.drain = mock.AsyncMock()
+            spawned["proc"] = proc
+            return proc
+
+        req = mock.MagicMock()
+        req.match_info = {"slug": "Vice_Clip_1"}
+        req.query = {"discord": "1"}
+        prepare = mock.AsyncMock(return_value=prepared, side_effect=raises)
+        with mock.patch.object(server, "_prepare_discord_copy", prepare), \
+             mock.patch("vice.share.shutil.which", side_effect=lambda t: t == "wl-copy"), \
+             mock.patch("asyncio.create_subprocess_exec", new=_fake_exec):
+            resp = await server._api_copy_file(req)
+        return json.loads(resp.text), spawned
+
+    async def test_the_discord_option_copies_the_discord_sized_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "Vice_Clip_1.mp4"
+            clip.write_bytes(b"full size")
+            small = Path(tmp) / ".discord" / "Vice_Clip_1_9_0.mp4"
+            small.parent.mkdir()
+            small.write_bytes(b"small")
+            server = ShareServer(Config())
+            server._clips = {"Vice_Clip_1": clip}
+
+            body, spawned = await self._copy_discord(server, prepared=small)
+
+            self.assertTrue(body["ok"])
+            written = spawned["proc"].stdin.write.call_args[0][0].decode()
+            self.assertEqual(written.strip(), small.resolve().as_uri())
+
+    async def test_a_clip_too_long_for_discord_is_reported_not_copied(self) -> None:
+        from vice.editor import DiscordTooLarge
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "Vice_Clip_1.mp4"
+            clip.write_bytes(b"data")
+            server = ShareServer(Config())
+            server._clips = {"Vice_Clip_1": clip}
+
+            body, spawned = await self._copy_discord(
+                server, raises=DiscordTooLarge("1800s cannot fit 20 MB. Trim it shorter first."))
+
+            self.assertFalse(body["ok"])
+            self.assertIn("Trim it shorter", body["error"])
+            self.assertNotIn("proc", spawned)
+
+    async def test_a_failed_discord_encode_never_falls_back_to_the_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "Vice_Clip_1.mp4"
+            clip.write_bytes(b"data")
+            server = ShareServer(Config())
+            server._clips = {"Vice_Clip_1": clip}
+
+            body, spawned = await self._copy_discord(server, prepared=None)
+
+            self.assertFalse(body["ok"])
+            self.assertNotIn("proc", spawned)
+
+
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
     """H.265 clips can't decode in the native WebEngine, so the daemon hands
@@ -1565,6 +1629,22 @@ class ShareServerConfigApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved_cfg.hotkeys.clip_presets[0].key, "KEY_F6")
         self.assertEqual(saved_cfg.hotkeys.clip_presets[0].duration, 120)
         self.assertEqual(saved_cfg.recording.buffer_duration, 120)
+
+    async def test_the_share_button_choice_does_not_ask_for_a_restart(self) -> None:
+        # Only the UI reads it. A tunnel change is the control: that one does.
+        for patch, expected in (
+            ({"sharing": {"share_discord_file": True}}, False),
+            ({"sharing": {"cloudflare_tunnel": False}}, True),
+        ):
+            server = ShareServer(Config())
+            with mock.patch("vice.config.load", return_value=Config()):
+                with mock.patch("vice.config.save") as save_mock:
+                    response = await server._api_set_config(_JsonRequest(patch))
+            payload = json.loads(response.text)
+            self.assertTrue(payload["ok"], payload)
+            self.assertEqual(payload["restart_required"], expected, patch)
+            if "share_discord_file" in patch["sharing"]:
+                self.assertTrue(save_mock.call_args.args[0].sharing.share_discord_file)
 
     async def test_api_set_config_clamps_oversized_durations(self) -> None:
         server = ShareServer(Config(recording=RecordingConfig()))

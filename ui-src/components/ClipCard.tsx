@@ -25,6 +25,10 @@ export interface ClipActions {
   onReveal?: (clip: Clip) => void;
   onCopyFile?: (clip: Clip) => void;
   onShare?: (clip: Clip) => void;
+  /** Right-click on Share: the share sheet with every way out. */
+  onShareMenu?: (clip: Clip) => void;
+  /** Tooltip for the Share button, which depends on what it copies. */
+  shareLabel?: string;
   onRename?: (clip: Clip, name: string) => Promise<void>;
   onContextMenu?: (clip: Clip, at: {x: number; y: number}) => void;
   /** Set by the context menu to open this card's rename field. */
@@ -209,7 +213,10 @@ export function ClipCard({
               </IconButton>
             ) : null}
             {actions.onShare ? (
-              <IconButton label={t('card.share')} onClick={() => actions.onShare?.(clip)}>
+              <IconButton
+                label={actions.shareLabel ?? t('card.share')}
+                onClick={() => actions.onShare?.(clip)}
+                onContextMenu={actions.onShareMenu ? () => actions.onShareMenu?.(clip) : undefined}>
                 <LinkGlyph />
               </IconButton>
             ) : null}
@@ -236,12 +243,14 @@ const hasActions = (a: ClipActions) =>
 function IconButton({
   label,
   onClick,
+  onContextMenu,
   danger,
   disabled,
   children,
 }: {
   label: string;
   onClick: () => void;
+  onContextMenu?: () => void;
   danger?: boolean;
   disabled?: boolean;
   children: React.ReactNode;
@@ -257,7 +266,17 @@ function IconButton({
       onClick={e => {
         e.stopPropagation();
         onClick();
-      }}>
+      }}
+      onContextMenu={
+        onContextMenu
+          ? e => {
+              // The card has its own context menu; this one replaces it.
+              e.preventDefault();
+              e.stopPropagation();
+              onContextMenu();
+            }
+          : undefined
+      }>
       {children}
     </button>
   );

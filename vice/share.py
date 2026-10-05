@@ -1917,11 +1917,26 @@ class ShareServer:
 
     async def _api_copy_file(self, req: web.Request) -> web.Response:
         """Put the clip file itself on the clipboard so it can be pasted
-        straight into Discord instead of shared as a link (#117)."""
+        straight into Discord instead of shared as a link (#117).
+
+        With ``?discord=1`` the file is the Discord-sized copy, built first if
+        it does not exist yet. That is what the Share button copies when the
+        user chose Discord files over links.
+        """
         slug = req.match_info["slug"]
         path = self._clips.get(slug)
         if not path or not path.exists():
             raise web.HTTPNotFound()
+
+        if req.query.get("discord") == "1":
+            try:
+                copy_path = await self._prepare_discord_copy(slug, path)
+            except DiscordTooLarge as exc:
+                return web.json_response({"ok": False, "error": str(exc)})
+            if copy_path is None or not copy_path.exists():
+                return web.json_response(
+                    {"ok": False, "error": "Could not build a Discord-sized copy"})
+            path = copy_path
 
         uri = path.resolve().as_uri()
         # Chromium and Electron read pasted files from text/uri-list. Both
@@ -2616,11 +2631,13 @@ class ShareServer:
             getattr(old_cfg.output, "image_directory", "")
             != getattr(new_cfg.output, "image_directory", "")
         )
-        # embed_color is read per-request, so changing it (the UI syncs it
-        # on theme switches) must not demand a daemon restart.
+        # embed_color is read per-request (the UI syncs it on theme switches)
+        # and share_discord_file only by the UI, so neither demands a daemon
+        # restart.
         old_sharing = copy.deepcopy(old_cfg.sharing)
         new_sharing = copy.deepcopy(new_cfg.sharing)
         old_sharing.embed_color = new_sharing.embed_color = ""
+        old_sharing.share_discord_file = new_sharing.share_discord_file = False
         restart_required = (
             old_sharing != new_sharing
             or old_cfg.recording.gsr_args != new_cfg.recording.gsr_args

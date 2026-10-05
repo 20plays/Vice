@@ -18,6 +18,7 @@ import {
   IconEditor,
   IconHome,
   IconImages,
+  IconSparkle,
   IconMark,
   IconPlaylist,
   IconPlus,
@@ -45,9 +46,12 @@ const GAME_EMOJI = ['\u{1F3AE}', '\u{1F579}\uFE0F', '\u{1F3C6}', '\u2694\uFE0F',
 export function SideNav({
   onShowTutorial,
   onShowUpdate,
+  onShowWhatsNew,
 }: {
   onShowTutorial: () => void;
   onShowUpdate: () => void;
+  /** Absent when no release has notes to show. */
+  onShowWhatsNew?: () => void;
 }) {
   const {state, dispatch, notify, refreshPlaylists} = useStore();
   const [creating, setCreating] = useState(false);
@@ -161,6 +165,16 @@ export function SideNav({
               <span className="sidenav-foot-key">{t('nav.buffer')}</span>
               <span className="sidenav-foot-value">{formatDuration(buffer, true)}</span>
             </>
+          ) : null}
+          {onShowWhatsNew ? (
+            <button
+              type="button"
+              className="sidenav-help"
+              onClick={onShowWhatsNew}
+              title={t('nav.whatsNew')}
+              aria-label={t('nav.whatsNew')}>
+              <IconSparkle size={14} />
+            </button>
           ) : null}
           <button
             type="button"

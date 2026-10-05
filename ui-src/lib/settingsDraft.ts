@@ -53,6 +53,7 @@ export interface Draft {
 
   port: number;
   cloudflareTunnel: boolean;
+  shareDiscordFile: boolean;
 
   discordEnabled: boolean;
   discordGameIcons: boolean;
@@ -156,6 +157,7 @@ export function draftFromConfig(config: Config): Draft {
 
     port: num(s.port, 8765),
     cloudflareTunnel: s.cloudflare_tunnel !== false,
+    shareDiscordFile: Boolean(s.share_discord_file),
 
     discordEnabled: Boolean(d.enabled),
     discordGameIcons: d.game_icons !== false,
@@ -206,7 +208,6 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
       display: draft.display || null,
       follow_mouse_display: draft.followMouse,
       window_capture: draft.windowCapture,
-      capture_mode: draft.windowCapture ? 'active_game' : 'desktop',
       resolution: resolution === false ? null : resolution,
       container: draft.container,
       encoder: draft.encoder,
@@ -243,6 +244,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
     sharing: {
       port: Number(draft.port),
       cloudflare_tunnel: draft.cloudflareTunnel,
+      share_discord_file: draft.shareDiscordFile,
     },
     updates: {check_on_start: draft.checkForUpdates},
     notifications: {

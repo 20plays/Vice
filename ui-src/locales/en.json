@@ -65,14 +65,9 @@
     "microphone": "Microphone",
     "desktopAudio": "Desktop audio",
     "gameCapture": "Game Capture",
-    "gameCaptureUnsupported": "Requires the gpu-screen-recorder backend",
-    "captureModeGameShort": "Game",
-    "captureModeDesktopShort": "Desktop",
-    "captureModeDesktopWhole": "Desktop Capture",
-    "captureModeGameDetail": "Pinned to the focused game",
-    "captureModeDesktopDetail": "Full display",
-    "captureModeAppShort": "App",
-    "captureModeAppHelp": "Pin to a chosen window. Coming soon.",
+    "gameCaptureUnsupported": "Needs gpu-screen-recorder",
+    "gameCaptureGame": "Game window only",
+    "gameCaptureDesktop": "Whole display",
     "publicLink": "Public link",
     "on": "On",
     "off": "Off",
@@ -161,7 +156,13 @@
     "linkCopiedLocalDetail": "Install cloudflared for links that work off your network",
     "shareLinkCopied": "Share link copied",
     "alreadyIn": "Already in {playlist}",
-    "errAddClip": "Could not add the clip"
+    "errAddClip": "Could not add the clip",
+    "copyForDiscord": "Copy for Discord",
+    "shareTitle": "{action}. Right-click for more ways to share",
+    "discordPreparing": "Making a Discord-sized copy",
+    "discordCopied": "Copied for Discord",
+    "discordCopiedDetail": "Paste it into a Discord message. It fits the free upload limit.",
+    "errDiscordCopy": "Could not copy the clip for Discord"
   },
   "playlistModal": {
     "editTitle": "Edit playlist",
@@ -251,7 +252,8 @@
     "open": "Open",
     "useEmoji": "Use {emoji}",
     "errSetEmoji": "Could not set the emoji",
-    "main": "Main"
+    "main": "Main",
+    "whatsNew": "What's new"
   },
   "viewer": {
     "errReveal": "Could not open the file manager",
@@ -440,7 +442,11 @@
     "moreBody": "That is everything you need. Settings has the parts you only touch once.",
     "recTitle": "Recording",
     "recHelp": "Encoder, resolution, frame rate, which monitor, and which audio goes on which track.",
-    "badgeRec": "Rec"
+    "badgeRec": "Rec",
+    "gameCaptureTitle": "Record only the game",
+    "gameCaptureHelp": "Game Capture records just the game's window, so Discord and other windows stay out of your clips. Off records the whole display. You can switch it any time from quick settings.",
+    "shareDiscordTitle": "Share copies a Discord file",
+    "shareDiscordHelp": "Off, the Share button copies a link. On, it copies the clip itself, shrunk to fit Discord's free upload limit. Right-click Share for the other one, and change it any time in Settings."
   },
   "accents": {
     "blue": "Blue",
@@ -637,7 +643,11 @@
     "audioMuted": "Muted",
     "audioPreviewFailed": "Could not play this audio track. Try again or check the log.",
     "detachedTracksHelp": "Each recorded source has its own lane. Only track 1 starts enabled, so a combined track is not mixed twice. Unmute the sources you want to hear.",
-    "preparingMedia": "Preparing preview"
+    "preparingMedia": "Preparing preview",
+    "exportSummary": "{seconds}s · {format} into {path}",
+    "exportFormatDiscord": "Discord-optimized (under 20 MB)",
+    "exportFormatDefault": "H.264 and AAC",
+    "exportFolderUnpicked": "a folder you pick"
   },
   "settings": {
     "title": "Settings",
@@ -707,7 +717,7 @@
     "followMouseHelp": "Record whichever monitor the pointer is on. Switching monitors restarts the buffer, so a clip taken right after moving will be short.",
     "followMouseUnsupported": "Needs X11, Hyprland or Sway. Vice cannot tell where the pointer is on this session.",
     "windowCapture": "Game Capture",
-    "windowCaptureHelp": "Crop capture to the focused game's window instead of the whole display. Only pins to windows Vice recognizes as a game, so alt-tabbing to Discord or a browser doesn't move the capture.",
+    "windowCaptureHelp": "Record only the focused game's window instead of the whole display. Only windows Vice recognizes as a game count, so alt-tabbing to Discord or a browser does not move the capture. Switching to a different game restarts the buffer, so a clip taken right after is short.",
     "windowCaptureUnsupported": "Needs the gpu-screen-recorder backend.",
     "display": "Display",
     "displayAuto": "Auto (backend default)",
@@ -852,6 +862,35 @@
     "clearKey": "Clear",
     "imageDirectory": "Image folder",
     "imageDirectoryHelp": "Where screenshots are written. Kept apart from clips so an image viewer is not indexing a folder of video files.",
-    "soundScreenshot": "Screenshot"
+    "soundScreenshot": "Screenshot",
+    "shareDiscordFile": "Share copies a Discord file",
+    "shareDiscordFileHelp": "On: the Share button copies the clip itself, shrunk to fit Discord's free upload limit, ready to paste into a message. Off: it copies the share link. Right-click Share for the other one either way."
+  },
+  "whatsNew": {
+    "title": "What's new in Vice {version}",
+    "close": "Got it",
+    "thanks": "Thanks to {names} for their work on this release.",
+    "v2_15_0": {
+      "gameCapture": {
+        "title": "Record only the game",
+        "body": "Turn on Game Capture in quick settings and Vice records just the game's window, so Discord and everything else stay out of your clips. It is off unless you turn it on."
+      },
+      "discordShare": {
+        "title": "Share straight to Discord",
+        "body": "Right-click Share for a copy of the clip that fits Discord's free upload limit, ready to drag or paste. Settings, Sharing can make that what Share does. The editor can also export a Discord-sized file."
+      },
+      "gameIcons": {
+        "title": "Your game's icon on Discord",
+        "body": "Your Discord profile now shows the game's own icon while you play, with Vice's logo as a small badge. Turn it off in Settings, Discord."
+      },
+      "steamNames": {
+        "title": "More games recognized",
+        "body": "Any game installed through Steam is now named in clips and on Discord, even when it is not on Vice's own list."
+      },
+      "languages": {
+        "title": "French and Brazilian Portuguese",
+        "body": "Vice is now available in French and Brazilian Portuguese. Pick a language in Settings, Appearance."
+      }
+    }
   }
 }

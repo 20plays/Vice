@@ -10,7 +10,7 @@ import {
 } from 'react';
 
 import {api} from '../lib/api';
-import {copyShareLink} from '../lib/share';
+import {copyShareLink, shareButtonLabel, shareClip as runShare} from '../lib/share';
 import {clipTitle, type Clip, type Highlight} from '../lib/types';
 import {Modal} from '../components/Modal';
 import {ShareModal} from '../components/ShareModal';
@@ -136,7 +136,12 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
     [fail],
   );
 
-  const share = useCallback((clip: Clip) => setShareSlug(clip.slug), []);
+  const discordFile = Boolean(state.config?.sharing?.share_discord_file);
+  const share = useCallback(
+    (clip: Clip) => void runShare(clip, discordFile, notify, setManualCopy),
+    [discordFile, notify],
+  );
+  const shareMenu = useCallback((clip: Clip) => setShareSlug(clip.slug), []);
 
   const copyLink = useCallback(
     (clip: Clip) => void copyShareLink(clip, notify, setManualCopy),
@@ -163,6 +168,8 @@ export function PlaybackProvider({children}: {children: ReactNode}) {
         trimOpen={trimSlug !== null}
         onRename={rename}
         onShare={share}
+        onShareMenu={shareMenu}
+        shareLabel={shareButtonLabel(discordFile)}
         onReveal={reveal}
         onOpenExternally={openExternally}
         onDelete={setConfirmDelete}

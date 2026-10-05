@@ -1,7 +1,7 @@
 import {useCallback, useMemo, useState, type ReactNode} from 'react';
 
 import {api} from '../lib/api';
-import {copyShareLink} from '../lib/share';
+import {copyShareLink, shareButtonLabel, shareClip} from '../lib/share';
 import {clipTitle, type Clip} from '../lib/types';
 import type {ClipActions} from '../components/ClipCard';
 import {ContextMenu} from '../components/ContextMenu';
@@ -86,6 +86,15 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
     [notify, state.clips],
   );
 
+  const discordFile = Boolean(state.config?.sharing?.share_discord_file);
+  const share = useCallback(
+    (clip: Clip) => {
+      const currentClip = state.clips.find(candidate => candidate.slug === clip.slug) ?? clip;
+      void shareClip(currentClip, discordFile, notify, setManualCopy);
+    },
+    [discordFile, notify, state.clips],
+  );
+
   const reveal = useCallback(
     (clip: Clip) => void api.revealClip(clip.slug).catch(fail(t('viewer.errReveal'))),
     [fail],
@@ -112,7 +121,9 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
     () => ({
       onOpen: clip => openViewer(clip.slug),
       onTrim: clip => openTrim(clip.slug),
-      onShare: clip => openShare(clip.slug),
+      onShare: share,
+      onShareMenu: clip => openShare(clip.slug),
+      shareLabel: shareButtonLabel(discordFile),
       onCopyFile: copyFile,
       onReveal: reveal,
       onDelete: setConfirmDelete,
@@ -121,7 +132,7 @@ export function useClipActions(): {actions: ClipActions; overlays: ReactNode} {
       renamingSlug: renaming,
       onRenameDone: () => setRenaming(null),
     }),
-    [openViewer, openTrim, openShare, copyFile, reveal, rename, renaming],
+    [openViewer, openTrim, openShare, share, discordFile, copyFile, reveal, rename, renaming],
   );
 
   const menuClip = menu?.clip;

@@ -494,11 +494,11 @@ function ExportModal({
 
   const dir =
     location === 'library' ? libraryDir : location === 'videos' ? '~/Videos' : custom.trim() || '';
-  const summary = `${Math.round(duration)}s · ${
-    discordOptimized ? 'Discord-optimized (under 20 MB)' : 'H.264 and AAC'
-  } into ${dir || 'a folder you pick'}/${
-    (name.trim() || 'Vice_Edit_N').replace(/\.mp4$/i, '')
-  }.mp4`;
+  const summary = t('editor.exportSummary', {
+    seconds: Math.round(duration),
+    format: discordOptimized ? t('editor.exportFormatDiscord') : t('editor.exportFormatDefault'),
+    path: `${dir || t('editor.exportFolderUnpicked')}/${(name.trim() || 'Vice_Edit_N').replace(/\.mp4$/i, '')}.mp4`,
+  });
 
   const start = async () => {
     if (location === 'custom' && !custom.trim()) {

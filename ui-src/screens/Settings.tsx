@@ -910,6 +910,16 @@ export function Settings() {
               onChange={cloudflareTunnel => update({cloudflareTunnel})}
             />
           </Row>
+
+          <Row
+            label={t('settings.shareDiscordFile')}
+            help={t('settings.shareDiscordFileHelp')}>
+            <Toggle
+              label={t('settings.shareDiscordFile')}
+              checked={draft.shareDiscordFile}
+              onChange={shareDiscordFile => update({shareDiscordFile})}
+            />
+          </Row>
         </Card>
 
         {/* ── Discord ───────────────────────────────────────────── */}

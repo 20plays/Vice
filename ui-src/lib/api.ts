@@ -65,7 +65,17 @@ export const api = {
   renameClip: (slug: string, name: string) => post<Clip>(`/api/clips/${enc(slug)}/rename`, {name}),
   revealClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/reveal`),
   openClip: (slug: string) => post<void>(`/api/clips/${enc(slug)}/open`),
-  copyClipFile: (slug: string) => post<void>(`/api/clips/${enc(slug)}/copy-file`),
+  /**
+   * Put the clip file on the clipboard, or its Discord-sized copy, which is
+   * built first if it does not exist yet. The daemon answers 200 with
+   * `ok: false` when there is no clipboard tool, so that has to throw too.
+   */
+  copyClipFile: async (slug: string, opts: {discord?: boolean} = {}) => {
+    const result = await post<{ok?: boolean; error?: string}>(
+      `/api/clips/${enc(slug)}/copy-file${opts.discord ? '?discord=1' : ''}`,
+    );
+    if (result?.ok === false) throw new Error(result.error);
+  },
   /**
    * Build (or reuse) a Discord-sized copy of the clip and return where it is.
    * Slow the first time: it transcodes.
