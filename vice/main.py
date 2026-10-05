@@ -996,14 +996,27 @@ class ViceDaemon:
             self._discord_task = asyncio.create_task(self._discord_presence_loop())
 
     def _discord_activity(self, game: str) -> dict:
+        icon = None
+        if self.cfg.discord.game_icons:
+            from .game_icons import discord_icon_url
+            icon = discord_icon_url(game)
+        if icon:
+            assets = {
+                "large_image": icon,
+                "large_text": game,
+                "small_image": "vice_logo",
+                "small_text": "Vice",
+            }
+        else:
+            assets = {
+                "large_image": "vice_logo",
+                "large_text": "Vice, Linux clip recorder",
+            }
         return {
             "details": f"Clipping {game} with Vice",
             "state": game,
             "timestamps": {"start": int(self._discord_started_at)},
-            "assets": {
-                "large_image": "vice_logo",
-                "large_text": "Vice, Linux clip recorder",
-            },
+            "assets": assets,
         }
 
     async def _discord_presence_loop(self) -> None:

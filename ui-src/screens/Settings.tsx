@@ -925,6 +925,16 @@ export function Settings() {
           </Row>
 
           <Row
+            label={t('settings.discordGameIcons')}
+            help={t('settings.discordGameIconsHelp')}>
+            <Toggle
+              label={t('settings.discordGameIcons')}
+              checked={draft.discordGameIcons}
+              onChange={discordGameIcons => update({discordGameIcons})}
+            />
+          </Row>
+
+          <Row
             label={t('settings.discordCustomGames')}
             stack
             help={

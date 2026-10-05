@@ -242,6 +242,9 @@ class DiscordConfig:
     # Keep the activity card up while the matched game's process is running,
     # not only while its window is focused.
     persist_while_running: bool = True
+    # Show the game's own Discord icon as the large image, with Vice's logo as
+    # a small badge. Off, or any failed lookup, sends the plain Vice logo.
+    game_icons: bool = True
     # User-managed game additions on top of the bundled games.json database.
     custom_games: list[DiscordCustomGame] = field(default_factory=list)
 
