@@ -22,6 +22,7 @@ import json
 import logging
 from dataclasses import asdict
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -35,6 +36,7 @@ from urllib.request import urlopen
 import click
 
 from . import __version__
+from .active_window import steam_game_name
 from .config import (
     Config,
     CONFIG_DIR,
@@ -1218,7 +1220,16 @@ class ViceDaemon:
         # User custom games first, explicit user intent beats the bundled list.
         custom = [(g.name, g.matches) for g in self.cfg.discord.custom_games]
         bundled = [(g["name"], g.get("matches")) for g in _DEFAULT_GAMES]
-        return _best_game_match(custom, haystacks) or _best_game_match(bundled, haystacks)
+        matched = _best_game_match(custom, haystacks) or _best_game_match(bundled, haystacks)
+        if matched:
+            return matched
+        # Not on either list. The lists stay the source of truth, since tags and
+        # auto playlists are keyed on their names, so Steam's own name only
+        # fills the gaps for games that aren't listed.
+        if not app_id:
+            from_class = re.match(r"steam_app_(\d+)$", cls)
+            app_id = from_class.group(1) if from_class else None
+        return steam_game_name(app_id) if app_id else None
 
     def _disk_stats(self) -> Optional[dict]:
         """Free space where clips land, for the Home readout.
