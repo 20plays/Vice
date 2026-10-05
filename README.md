@@ -371,6 +371,8 @@ Vice is better because these people sent patches:
 - [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool, and for fixing scroll dismissal in clip context menus
 - [@UMCEKO](https://github.com/UMCEKO), for the NixOS package and module
 - [@marcobabinski](https://github.com/marcobabinski), for the Brazilian Portuguese translation
+- [@bryan-ovalle2](https://github.com/bryan-ovalle2), for Game Capture and Discord-sized sharing and exports
+- [@suriyahs](https://github.com/suriyahs), for game icons in Discord presence and naming any installed Steam game
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 
