@@ -11,6 +11,8 @@ from unittest import mock
 
 from vice import __version__
 from vice.config import Config, HotkeyConfig, OutputConfig, RecordingConfig, SharingConfig
+from vice.editor import (DISCORD_AUDIO_KBPS, DISCORD_MAX_MB,
+                         DISCORD_MIN_VIDEO_KBPS, DiscordTooLarge)
 
 try:
     from aiohttp import ClientSession
@@ -748,6 +750,70 @@ class ShareServerCopyFileTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("wl-clipboard", body["error"])
 
 
+    async def _copy_discord(self, server, *, prepared=None, raises=None):
+        spawned: dict = {}
+
+        async def _fake_exec(*cmd, **kwargs):
+            proc = mock.MagicMock()
+            proc.stdin = mock.MagicMock()
+            proc.stdin.drain = mock.AsyncMock()
+            spawned["proc"] = proc
+            return proc
+
+        req = mock.MagicMock()
+        req.match_info = {"slug": "Vice_Clip_1"}
+        req.query = {"discord": "1"}
+        prepare = mock.AsyncMock(return_value=prepared, side_effect=raises)
+        with mock.patch.object(server, "_prepare_discord_copy", prepare), \
+             mock.patch("vice.share.shutil.which", side_effect=lambda t: t == "wl-copy"), \
+             mock.patch("asyncio.create_subprocess_exec", new=_fake_exec):
+            resp = await server._api_copy_file(req)
+        return json.loads(resp.text), spawned
+
+    async def test_the_discord_option_copies_the_discord_sized_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "Vice_Clip_1.mp4"
+            clip.write_bytes(b"full size")
+            small = Path(tmp) / ".discord" / "Vice_Clip_1_9_0.mp4"
+            small.parent.mkdir()
+            small.write_bytes(b"small")
+            server = ShareServer(Config())
+            server._clips = {"Vice_Clip_1": clip}
+
+            body, spawned = await self._copy_discord(server, prepared=small)
+
+            self.assertTrue(body["ok"])
+            written = spawned["proc"].stdin.write.call_args[0][0].decode()
+            self.assertEqual(written.strip(), small.resolve().as_uri())
+
+    async def test_a_clip_too_long_for_discord_is_reported_not_copied(self) -> None:
+        from vice.editor import DiscordTooLarge
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "Vice_Clip_1.mp4"
+            clip.write_bytes(b"data")
+            server = ShareServer(Config())
+            server._clips = {"Vice_Clip_1": clip}
+
+            body, spawned = await self._copy_discord(
+                server, raises=DiscordTooLarge("1800s cannot fit 20 MB. Trim it shorter first."))
+
+            self.assertFalse(body["ok"])
+            self.assertIn("Trim it shorter", body["error"])
+            self.assertNotIn("proc", spawned)
+
+    async def test_a_failed_discord_encode_never_falls_back_to_the_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "Vice_Clip_1.mp4"
+            clip.write_bytes(b"data")
+            server = ShareServer(Config())
+            server._clips = {"Vice_Clip_1": clip}
+
+            body, spawned = await self._copy_discord(server, prepared=None)
+
+            self.assertFalse(body["ok"])
+            self.assertNotIn("proc", spawned)
+
+
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
 class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
     """H.265 clips can't decode in the native WebEngine, so the daemon hands
@@ -804,6 +870,167 @@ class PreviewProxyTests(unittest.IsolatedAsyncioTestCase):
             with mock.patch.object(share_mod, "PROXY_DIR", proxy_dir):
                 share_mod._purge_slug_proxies("Vice_Clip_9")
             self.assertEqual(list(proxy_dir.glob("*.mp4")), [])
+
+
+class DiscordCopyTests(unittest.IsolatedAsyncioTestCase):
+    """The share sheet drags a copy sized for Discord's upload cap."""
+
+    class _FakeProc:
+        returncode = 0
+
+        async def communicate(self) -> tuple[bytes, bytes]:
+            return b"", b""
+
+    def _recording_ffmpeg(self, captured: list) -> "callable":
+        """Stand-in for ffmpeg that records the argv and writes the output."""
+        async def fake_exec(*cmd, **_kwargs):
+            captured.append(list(cmd))
+            Path(cmd[-1]).write_bytes(b"encoded")
+            return self._FakeProc()
+        return fake_exec
+
+    @staticmethod
+    def _kbps(cmd: list) -> int:
+        return int(cmd[cmd.index("-b:v") + 1].rstrip("k"))
+
+    async def test_an_mp4_under_the_cap_is_dragged_as_is(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mp4"
+            src.write_bytes(b"small")
+            out = await share_mod._make_discord_copy(src, 10)
+            self.assertEqual(out, src)
+            self.assertFalse((root / share_mod.DISCORD_SUBDIR).exists())
+
+    async def test_the_copy_lands_beside_the_clip(self) -> None:
+        """A sandboxed drop target (Discord ships as a Flatpak) can only read
+        the folders it was granted, and the clip's own is one of them. A copy
+        in ~/.cache dropped as a path it cannot open, which Discord reported
+        as an empty file."""
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "clips" / "Vice_Clip_1.mkv"
+            src.parent.mkdir()
+            src.write_bytes(b"not-a-real-mkv")
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg([])):
+                out = await share_mod._make_discord_copy(src, 10)
+            self.assertEqual(out.parent, src.parent / share_mod.DISCORD_SUBDIR)
+
+    async def test_bitrate_budget_shrinks_with_duration_and_audio_tracks(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # .mkv, so the "already small enough" shortcut never applies and
+            # every case actually goes through the budget.
+            src = root / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            captured: list = []
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg(captured)):
+                for duration, tracks in ((10, 1), (200, 1), (10, 2)):
+                    share_mod._purge_clip_discord(src)
+                    out = await share_mod._make_discord_copy(src, duration, tracks)
+                    self.assertIsNotNone(out)
+
+        short, long, two_tracks = (self._kbps(c) for c in captured)
+        self.assertGreater(short, long)
+        self.assertEqual(short - two_tracks, DISCORD_AUDIO_KBPS)
+        self.assertGreaterEqual(long, DISCORD_MIN_VIDEO_KBPS)
+        # The budget has to fit the cap, not just be smaller than the source.
+        self.assertLess(short * 10 / 8192, DISCORD_MAX_MB)
+
+    async def test_a_clip_the_budget_cannot_fit_is_refused(self) -> None:
+        """30 minutes with one audio track budgets 62 MB at the video floor.
+        Encoding it anyway produced a "Discord-sized" copy Discord rejects."""
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            with mock.patch("asyncio.create_subprocess_exec") as spawn:
+                with self.assertRaises(DiscordTooLarge):
+                    await share_mod._make_discord_copy(src, 1800)
+                spawn.assert_not_called()
+            self.assertFalse((Path(tmp) / share_mod.DISCORD_SUBDIR).exists())
+            self.assertEqual(src.read_bytes(), b"not-a-real-mkv")
+
+    async def test_extra_audio_tracks_can_push_a_clip_past_the_cap(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            captured: list = []
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg(captured)):
+                self.assertIsNotNone(await share_mod._make_discord_copy(src, 450, 1))
+                share_mod._purge_clip_discord(src)
+                with self.assertRaises(DiscordTooLarge):
+                    await share_mod._make_discord_copy(src, 450, 6)
+            self.assertEqual(len(captured), 1)
+            self.assertEqual(src.read_bytes(), b"not-a-real-mkv")
+
+    async def test_an_oversized_encode_is_neither_served_nor_cached(self) -> None:
+        """The budget aims at the cap, single-pass ABR does not promise it."""
+        import vice.share as share_mod
+
+        async def fat_ffmpeg(*cmd, **_kwargs):
+            Path(cmd[-1]).write_bytes(b"x" * (21 * 1024 * 1024))
+            return self._FakeProc()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            with mock.patch("asyncio.create_subprocess_exec", fat_ffmpeg):
+                self.assertIsNone(await share_mod._make_discord_copy(src, 10))
+            copies = Path(tmp) / share_mod.DISCORD_SUBDIR
+            self.assertEqual(list(copies.glob("*")), [])
+            self.assertEqual(src.read_bytes(), b"not-a-real-mkv")
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is not installed")
+    async def test_an_odd_sized_source_still_encodes(self) -> None:
+        """libx264 rejects an odd height under yuv420p rather than rounding
+        it, so a 127x73 clip failed outright once the scale filter ran."""
+        import vice.share as share_mod
+        from vice.media import probe_media
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "Vice_Clip_1.mkv"
+            subprocess.run([
+                "ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                "testsrc=size=127x73:rate=10:duration=0.5",
+                "-c:v", "ffv1", "-threads", "1", str(src),
+            ], check=True, timeout=30)
+            out = await share_mod._make_discord_copy(src, 0.5)
+            self.assertIsNotNone(out, "the odd-sized source did not encode")
+            meta = await probe_media(out)
+            self.assertEqual(meta["width"] % 2, 0)
+            self.assertEqual(meta["height"] % 2, 0)
+
+    async def test_the_copy_is_cached_and_transcoded_once(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "Vice_Clip_1.mkv"
+            src.write_bytes(b"not-a-real-mkv")
+            captured: list = []
+            with mock.patch("asyncio.create_subprocess_exec",
+                            self._recording_ffmpeg(captured)):
+                first = await share_mod._make_discord_copy(src, 10)
+                again = await share_mod._make_discord_copy(src, 10)
+            self.assertEqual(first, again)
+            self.assertEqual(len(captured), 1)
+
+    def test_purge_removes_the_cached_copy(self) -> None:
+        import vice.share as share_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = Path(tmp) / "Vice_Clip_9.mp4"
+            copies = Path(tmp) / share_mod.DISCORD_SUBDIR
+            copies.mkdir()
+            (copies / "Vice_Clip_9_123_456.mp4").write_bytes(b"x")
+            (copies / "Vice_Clip_8_123_456.mp4").write_bytes(b"x")
+            share_mod._purge_clip_discord(clip)
+            self.assertEqual([p.name for p in copies.glob("*.mp4")],
+                             ["Vice_Clip_8_123_456.mp4"])
 
 
 @unittest.skipUnless(ShareServer is not None, "aiohttp is not installed")
@@ -1403,6 +1630,22 @@ class ShareServerConfigApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved_cfg.hotkeys.clip_presets[0].duration, 120)
         self.assertEqual(saved_cfg.recording.buffer_duration, 120)
 
+    async def test_the_share_button_choice_does_not_ask_for_a_restart(self) -> None:
+        # Only the UI reads it. A tunnel change is the control: that one does.
+        for patch, expected in (
+            ({"sharing": {"share_discord_file": True}}, False),
+            ({"sharing": {"cloudflare_tunnel": False}}, True),
+        ):
+            server = ShareServer(Config())
+            with mock.patch("vice.config.load", return_value=Config()):
+                with mock.patch("vice.config.save") as save_mock:
+                    response = await server._api_set_config(_JsonRequest(patch))
+            payload = json.loads(response.text)
+            self.assertTrue(payload["ok"], payload)
+            self.assertEqual(payload["restart_required"], expected, patch)
+            if "share_discord_file" in patch["sharing"]:
+                self.assertTrue(save_mock.call_args.args[0].sharing.share_discord_file)
+
     async def test_api_set_config_clamps_oversized_durations(self) -> None:
         server = ShareServer(Config(recording=RecordingConfig()))
         request = _JsonRequest({
@@ -1614,6 +1857,50 @@ class EditorApiTests(unittest.IsolatedAsyncioTestCase):
             }) as resp:
                 self.assertEqual(resp.status, 409)
         pending.cancel()
+
+    async def test_discord_export_refuses_a_clip_the_budget_cannot_fit(self) -> None:
+        """30 minutes cannot be squeezed under 20 MB. The export used to start
+        anyway and publish a file three times over Discord's cap."""
+        import vice.share as share_mod
+        clip = self.output_dir / "Vice_Clip_1.mp4"
+        clip.write_bytes(b"not-a-real-mp4")
+        self.server.add_clip(clip)
+        self.server._meta["Vice_Clip_1"] = {"duration": 1800, "width": 1920,
+                                            "height": 1080, "audio_streams": 1}
+        async with self.client.post(f"{self.base}/api/editor/export", json={
+            "project": self._project([
+                {"id": "i1", "kind": "clip", "trackId": "V1",
+                 "clipId": "Vice_Clip_1", "start": 0, "dur": 1800, "offset": 0},
+            ]),
+            "filename": "too-long",
+            "discord_optimized": True,
+        }) as resp:
+            self.assertEqual(resp.status, 400)
+            payload = await resp.json()
+        self.assertIn("20 MB", payload["error"])
+        self.assertFalse(self.server._exports.busy)
+        self.assertFalse((self.output_dir / "too-long.mp4").exists())
+        self.assertEqual(clip.read_bytes(), b"not-a-real-mp4")
+        self.assertEqual(list(share_mod.EXPORT_WORK_DIR.glob("*")), [])
+
+    async def test_a_discord_export_carries_the_size_limit(self) -> None:
+        from vice.editor import DISCORD_MAX_BYTES
+        clip = self.output_dir / "Vice_Clip_1.mp4"
+        clip.write_bytes(b"not-a-real-mp4")
+        self.server.add_clip(clip)
+        self.server._meta["Vice_Clip_1"] = {"duration": 10, "width": 1920,
+                                            "height": 1080, "audio_streams": 1}
+        project = self._project([
+            {"id": "i1", "kind": "clip", "trackId": "V1",
+             "clipId": "Vice_Clip_1", "start": 0, "dur": 10, "offset": 0},
+        ])
+        with mock.patch.object(self.server._exports, "start") as start:
+            for discord, expected in ((True, DISCORD_MAX_BYTES), (False, None)):
+                async with self.client.post(
+                        f"{self.base}/api/editor/export",
+                        json={"project": project, "discord_optimized": discord}) as resp:
+                    self.assertEqual(resp.status, 200)
+                self.assertEqual(start.call_args.kwargs["max_bytes"], expected)
 
     async def test_cancel_of_unknown_job_is_404(self) -> None:
         async with self.client.post(
@@ -2452,3 +2739,51 @@ class ShareTokenTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(self.server, "_serve_preview_proxy") as proxy:
             self.assertEqual(await self._status(f"{self.public}/v/{token}?proxy=1"), 200)
         proxy.assert_not_called()
+
+    async def _rename(self, slug: str, name: str) -> str:
+        async with self.client.post(f"{self.local}/api/clips/{slug}/rename", json={"name": name}) as resp:
+            body = await resp.json()
+        self.assertTrue(body.get("ok"), body)
+        return body["clip"]["slug"] if "clip" in body else body["slug"]
+
+    def _seed_cache(self, clip: Path) -> dict:
+        proxy = _share._proxy_path(clip)
+        files = {
+            "thumb": _share._thumb_path(clip),
+            "proxy": proxy,
+            "audio": proxy.with_name(f"{proxy.stem}_audio_0.m4a"),
+        }
+        for kind, path in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(kind.encode())
+        return files
+
+    async def test_a_rename_keeps_the_cached_preview_and_thumbnail(self) -> None:
+        # #226: purging these made an H.265 clip transcode its preview again
+        # after every rename, though the file itself had not changed.
+        clip = self.output_dir / "Vice_Clip_1.mp4"
+        self._seed_cache(clip)
+        stale = _share.THUMB_DIR / "Vice_Clip_1_1_1.jpg"
+        stale.write_bytes(b"an older version of the file")
+
+        new_slug = await self._rename("Vice_Clip_1", "clutch round")
+        renamed = self.output_dir / f"{new_slug}.mp4"
+
+        proxy = _share._proxy_path(renamed)
+        self.assertEqual(_share._thumb_path(renamed).read_bytes(), b"thumb")
+        self.assertEqual(proxy.read_bytes(), b"proxy")
+        self.assertEqual(proxy.with_name(f"{proxy.stem}_audio_0.m4a").read_bytes(), b"audio")
+        self.assertFalse(list(_share.THUMB_DIR.glob("Vice_Clip_1*")), "old thumbnails left behind")
+        self.assertFalse(list(_share.PROXY_DIR.glob("Vice_Clip_1*")), "old previews left behind")
+
+    async def test_a_longer_name_that_starts_with_the_old_one_keeps_what_it_moved(self) -> None:
+        # The purge matches "Vice_Clip_1*", which also matches "Vice_Clip_1-final".
+        clip = self.output_dir / "Vice_Clip_1.mp4"
+        self._seed_cache(clip)
+
+        new_slug = await self._rename("Vice_Clip_1", "Vice_Clip_1 final")
+        renamed = self.output_dir / f"{new_slug}.mp4"
+
+        self.assertTrue(new_slug.startswith("Vice_Clip_1"))
+        self.assertEqual(_share._thumb_path(renamed).read_bytes(), b"thumb")
+        self.assertEqual(_share._proxy_path(renamed).read_bytes(), b"proxy")

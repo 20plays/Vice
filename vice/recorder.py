@@ -35,6 +35,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from . import active_window
 from .config import Config
 from .media import get_duration as _get_duration
 from .media import probe_media_detailed
@@ -799,6 +800,40 @@ def _gsr_capture_target(rc, override: Optional[str] = None) -> str:
     return str(selected["id"]) if selected else _default_gsr_capture_target()
 
 
+def _gsr_capture_args(
+    rc, extra: list[str], override: Optional[str] = None, window_override: Optional[str] = None
+) -> list[str]:
+    """`-w` (and `-s` when needed) flags for gpu-screen-recorder when
+    recording.window_capture is on, else the configured/auto monitor target.
+
+    `window_override` is a specific window id the daemon has pinned capture
+    to, set only once it has confirmed (via games.json matching) that a
+    recognized game is focused, see Daemon._window_capture_loop. This is
+    deliberately not GSR's own `-w focused` mode, which tracks whichever
+    window currently has input focus and would jump to Discord/a browser/etc.
+    the moment you alt-tab away from the game. Pinning by id is X11/XWayland-
+    only (GSR's per-window capture doesn't support native-Wayland windows),
+    which is still the common case: Steam/Proton games render through
+    XWayland even on a Wayland desktop. Falls back to full-display capture
+    when no game is pinned yet or geometry can't be resolved.
+    """
+    if _gsr_has_any_flag(extra, "-w"):
+        return []
+    if getattr(rc, "window_capture", False) and window_override:
+        geometry = active_window.get_window_geometry(window_override)
+        if geometry:
+            args = ["-w", window_override]
+            if not (getattr(rc, "resolution", None) or _gsr_has_any_flag(extra, "-s")):
+                args += ["-s", f"{geometry[0]}x{geometry[1]}"]
+            return args
+        log.warning(
+            "recording.window_capture: pinned window %s is no longer "
+            "available; capturing the full display until a game is detected again",
+            window_override,
+        )
+    return ["-w", _gsr_capture_target(rc, override)]
+
+
 def _wf_capture_target(rc, override: Optional[str] = None) -> Optional[str]:
     selected = _resolve_display_option(rc, "wf-recorder", override)
     return str(selected["id"]) if selected else None
@@ -1051,6 +1086,12 @@ def _gsr_progress_line(line: str) -> bool:
 
 def _gsr_runtime_error(raw: str) -> Optional[str]:
     lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    # X answered but refused the connection. GSR then assumes there is no X
+    # server, fails on Wayland, and its last word is "failed to create
+    # window", which hides the cause entirely (#231).
+    if any("authorization required" in line.lower() for line in lines):
+        return ("the X session refused gpu-screen-recorder (authorization "
+                "required), so XAUTHORITY is missing or out of date")
     for line in reversed(lines):
         lowered = line.lower()
         if lowered.startswith(("gsr error:", "error:", "gpu-screen-recorder:")):
@@ -1355,6 +1396,11 @@ class Recorder(ABC):
         # when follow-the-pointer capture is on. Applied at start(), so the
         # daemon restarts the recorder after changing it.
         self.display_override: Optional[str] = None
+        # Window id to pin capture to instead of a display, set by the daemon
+        # when window_capture is on and it has confirmed a recognized game is
+        # focused (see games.json matching). Applied at start(), so the
+        # daemon restarts the recorder after changing it.
+        self.window_override: Optional[str] = None
         # Session recording state (shared across all backends)
         self._session_active = False
         self._session_proc: Optional[asyncio.subprocess.Process] = None
@@ -1526,7 +1572,7 @@ class Recorder(ABC):
         if _is_wayland():
             # Prefer gpu-screen-recorder on Wayland (especially smoother on NVIDIA).
             if _has("gpu-screen-recorder"):
-                return self._gsr_session_cmd(out_path, rc, self.display_override)
+                return self._gsr_session_cmd(out_path, rc, self.display_override, self.window_override)
 
             # Fallback: wf-recorder direct-to-file on Wayland.
             if _has("wf-recorder"):
@@ -1555,12 +1601,13 @@ class Recorder(ABC):
         return None
 
     @staticmethod
-    def _gsr_session_cmd(out_path: Path, rc, override: Optional[str] = None) -> list[str]:
+    def _gsr_session_cmd(
+        out_path: Path, rc, override: Optional[str] = None, window_override: Optional[str] = None
+    ) -> list[str]:
         extra = _gsr_sanitize_args(_extra_gsr_args(rc.gsr_args), {"-o", "-r"})
         cmd = ["gpu-screen-recorder"]
 
-        if not _gsr_has_any_flag(extra, "-w"):
-            cmd += ["-w", _gsr_capture_target(rc, override)]
+        cmd += _gsr_capture_args(rc, extra, override, window_override)
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]
         cmd += _gsr_resolution_args(rc, extra)
@@ -2136,8 +2183,7 @@ class GSRRecorder(Recorder):
         cmd = ["gpu-screen-recorder"]
 
         # Allow manual overrides through recording.gsr_args.
-        if not _gsr_has_any_flag(extra, "-w"):
-            cmd += ["-w", _gsr_capture_target(rc, self.display_override)]
+        cmd += _gsr_capture_args(rc, extra, self.display_override, self.window_override)
 
         if not _gsr_has_any_flag(extra, "-f"):
             cmd += ["-f", str(rc.fps)]

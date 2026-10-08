@@ -51,6 +51,22 @@ systemctl --user enable --now vice.service
 
 The package ships the service but does not enable it for you, so run that second line to have clipping start at login. `./install.sh` asks and does it for you.
 
+**NixOS (flake):**
+
+```nix
+{
+  inputs.vice.url = "github:eklonofficial/Vice";
+
+  outputs = { nixpkgs, vice, ... }: {
+    nixosConfigurations.yourhost = nixpkgs.lib.nixosSystem {
+      modules = [ vice.nixosModules.default { services.vice.enable = true; } ];
+    };
+  };
+}
+```
+
+The module installs the package, the `uaccess` udev rule for the hotkey listener, gpu-screen-recorder's capability wrapper so recording starts without a password prompt, and the user daemon, which starts with your graphical session. Set `services.vice.autoStart = false;` to only record while the window is open. Without flakes, `nix/package.nix` and `nix/module.nix` are plain callPackage/NixOS files you can import directly.
+
 **Ubuntu / Debian / Mint / Fedora / openSUSE / other:**
 
 ```bash
@@ -59,12 +75,13 @@ git clone https://github.com/eklonofficial/Vice && cd Vice && ./install.sh
 
 Launch **Vice** from your app menu (or run `vice-app`) and press **F9** in a game. If the terminal says `vice: command not found`, restart the terminal first.
 
-Both paths install everything Vice needs, including the `gpu-screen-recorder` capture backend and a systemd user service so clipping starts at login. The script detects your package manager (`apt`, `dnf`, `pacman`, `zypper`) automatically.
+The AUR package and the script install everything Vice needs, including the `gpu-screen-recorder` capture backend and a systemd user service so clipping starts at login. The script detects your package manager (`apt`, `dnf`, `pacman`, `zypper`) automatically.
 
 | | Update | Uninstall |
 |---|---|---|
 | AUR | `yay -Syu` | `sudo pacman -Rns vice-clipper` |
 | Git clone | `cd Vice && git pull && ./install.sh` | `vice uninstall && rm -rf Vice` |
+| NixOS | `nix flake update vice && sudo nixos-rebuild switch` | Remove `services.vice.enable` and rebuild |
 
 > Don't mix the AUR package and `./install.sh` on the same machine. Uninstall one before switching.
 
@@ -349,9 +366,13 @@ Vice is better because these people sent patches:
 - [@quadruplea0](https://github.com/quadruplea0), for making the resolution setting actually reach gpu-screen-recorder
 - [@DeveloperSpoot](https://github.com/DeveloperSpoot), for themed Discord embeds, their idea and their first implementation
 - [@jethrothelion](https://github.com/jethrothelion), for Chivalry 2 and Clone Drone in The Danger Zone
-- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, and Sandustry
+- [@voltek-laruelle](https://github.com/voltek-laruelle), for the clip volume slider, the French translation, and for GeoGuessr Steam Edition, Forza Horizon 4, Big Walk, Supermarket Simulator, Sandustry, and OpenFront
 - [@20plays](https://github.com/20plays), for preserving working Arch installations during installer dependency checks and selecting the distro Python for QtWebEngine
 - [@KITE-Force](https://github.com/KITE-Force), for game detection on KDE Plasma Wayland through kdotool, and for fixing scroll dismissal in clip context menus
+- [@UMCEKO](https://github.com/UMCEKO), for the NixOS package and module
+- [@marcobabinski](https://github.com/marcobabinski), for the Brazilian Portuguese translation
+- [@bryan-ovalle2](https://github.com/bryan-ovalle2), for Game Capture and Discord-sized sharing and exports
+- [@suriyahs](https://github.com/suriyahs), for game icons in Discord presence and naming any installed Steam game
 
 And to everyone who has opened an issue with a log attached: that is most of how the hard bugs get found.
 

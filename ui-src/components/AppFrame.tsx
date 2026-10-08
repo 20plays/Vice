@@ -3,6 +3,8 @@ import {createContext, useContext, useEffect, useLayoutEffect, useRef, useState,
 import {api} from '../lib/api';
 import {IS_NATIVE, keepRunning, quitVice} from '../lib/env';
 import {Tutorial} from './Tutorial';
+import {WhatsNew} from './WhatsNew';
+import {latestNotedVersion, notesFor} from '../lib/whatsNew';
 import {UpdateNotice} from './UpdateNotice';
 import {IconMinimize, IconPower} from './Icons';
 import {useStore} from '../state/store';
@@ -41,6 +43,8 @@ export function AppFrame({children}: {children: ReactNode}) {
   const quitHidden = state.view === 'editor' || state.view === 'settings';
   const [tutorial, setTutorial] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [whatsNew, setWhatsNew] = useState<string | null>(null);
+  const version = state.status.version;
   const contentRef = useRef<HTMLDivElement>(null);
   const [homeLayout, setHomeLayout] = useState<HomeLayout>('narrow');
 
@@ -78,9 +82,50 @@ export function AppFrame({children}: {children: ReactNode}) {
     };
   }, []);
 
+  // The first launch after an update shows that release's notes, once. A new
+  // install skips them: the tutorial covers the same ground, and finishing it
+  // records this version as seen. Kept on the daemon as well as locally for
+  // the same reason as the tutorial flag.
+  useEffect(() => {
+    if (!version || !notesFor(version)) return;
+    if (localStorage.getItem('vice_whats_new_seen') === version) return;
+    let cancelled = false;
+    void api
+      .getAppState()
+      .then(s => {
+        if (cancelled) return;
+        if (s.whats_new_seen === version) {
+          localStorage.setItem('vice_whats_new_seen', version);
+          return;
+        }
+        const returning = Boolean(s.tutorial_seen) || Boolean(localStorage.getItem('vice_tutorial_shown'));
+        if (returning) setWhatsNew(version);
+      })
+      .catch(err => console.debug('Could not read whether these notes were seen', err));
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
+
+  const closeWhatsNew = () => {
+    if (whatsNew === version && version) {
+      localStorage.setItem('vice_whats_new_seen', version);
+      void api.setAppState({whats_new_seen: version}).catch(err => {
+        console.debug('Recording that the notes were seen failed', err);
+      });
+    }
+    setWhatsNew(null);
+  };
+
+  const notedVersion = notesFor(version) ? version : latestNotedVersion();
+
   return (
     <div className="frame">
-      <SideNav onShowTutorial={() => setTutorial(true)} onShowUpdate={() => setUpdateOpen(true)} />
+      <SideNav
+        onShowTutorial={() => setTutorial(true)}
+        onShowUpdate={() => setUpdateOpen(true)}
+        onShowWhatsNew={notedVersion ? () => setWhatsNew(notedVersion) : undefined}
+      />
       <Melt />
       <div className="frame-content" ref={contentRef}
         data-home-wide={state.view === 'home' && homeLayout !== 'narrow' || undefined}
@@ -93,6 +138,7 @@ export function AppFrame({children}: {children: ReactNode}) {
       {IS_NATIVE ? <QuitRow hidden={quitHidden} /> : null}
       <Tutorial open={tutorial} onClose={() => setTutorial(false)} />
       <UpdateNotice forceOpen={updateOpen} onClose={() => setUpdateOpen(false)} />
+      <WhatsNew version={whatsNew} open={whatsNew !== null} onClose={closeWhatsNew} />
     </div>
   );
 }

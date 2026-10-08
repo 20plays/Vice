@@ -24,6 +24,7 @@ export interface Draft {
   replayStorage: string;
   display: string;
   followMouse: boolean;
+  windowCapture: boolean;
   hardwareDecode: boolean;
 
   captureAudio: boolean;
@@ -52,8 +53,10 @@ export interface Draft {
 
   port: number;
   cloudflareTunnel: boolean;
+  shareDiscordFile: boolean;
 
   discordEnabled: boolean;
+  discordGameIcons: boolean;
   discordClientId: string;
   discordCustomGames: string;
 
@@ -118,6 +121,7 @@ export function draftFromConfig(config: Config): Draft {
     replayStorage: str(r.gsr_replay_storage, 'auto'),
     display: str(r.display, ''),
     followMouse: Boolean(r.follow_mouse_display),
+    windowCapture: Boolean(r.window_capture),
     hardwareDecode: Boolean(ui.hardware_video_decode),
 
     captureAudio: r.capture_audio !== false,
@@ -153,8 +157,10 @@ export function draftFromConfig(config: Config): Draft {
 
     port: num(s.port, 8765),
     cloudflareTunnel: s.cloudflare_tunnel !== false,
+    shareDiscordFile: Boolean(s.share_discord_file),
 
     discordEnabled: Boolean(d.enabled),
+    discordGameIcons: d.game_icons !== false,
     discordClientId: str(d.client_id_override, ''),
     discordCustomGames: (Array.isArray(d.custom_games) ? d.custom_games : [])
       .map(raw => {
@@ -201,6 +207,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
       fps: Number(draft.fps),
       display: draft.display || null,
       follow_mouse_display: draft.followMouse,
+      window_capture: draft.windowCapture,
       resolution: resolution === false ? null : resolution,
       container: draft.container,
       encoder: draft.encoder,
@@ -237,6 +244,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
     sharing: {
       port: Number(draft.port),
       cloudflare_tunnel: draft.cloudflareTunnel,
+      share_discord_file: draft.shareDiscordFile,
     },
     updates: {check_on_start: draft.checkForUpdates},
     notifications: {
@@ -248,6 +256,7 @@ export function patchFromDraft(draft: Draft): Record<string, Record<string, unkn
     ui: {hardware_video_decode: draft.hardwareDecode},
     discord: {
       enabled: draft.discordEnabled,
+      game_icons: draft.discordGameIcons,
       client_id_override: draft.discordClientId.trim() || null,
       custom_games: parseCustomGames(draft.discordCustomGames),
     },

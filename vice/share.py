@@ -42,8 +42,9 @@ from importlib.resources import files as _pkg_files
 from aiohttp import WSMsgType, web
 
 from . import __version__
-from .editor import (EditorProjectStore, ExportBusy, ExportManager, Source,
-                     build_export_cmd, default_export_name, project_extent,
+from .editor import (DISCORD_MAX_BYTES, DiscordTooLarge, EditorProjectStore,
+                     ExportBusy, ExportManager, Source, build_export_cmd,
+                     default_export_name, discord_bitrates, project_extent,
                      sanitize_export_name, text_file_contents,
                      validate_project)
 from .media import communicate_with_timeout, probe_media, probe_media_detailed
@@ -161,6 +162,12 @@ def _resolve_ui_asset(kind: str, name: str) -> Path | None:
 THUMB_DIR      = actual_home_dir() / ".cache" / "vice" / "thumbs"
 # H.264 preview copies of clips the native WebEngine can't decode (H.265).
 PROXY_DIR      = actual_home_dir() / ".cache" / "vice" / "proxies"
+# Discord-sized copies live in a hidden folder beside the clip they came from,
+# not in ~/.cache: the drag hands another app a path, and a sandboxed one
+# (Discord ships as a Flatpak) can only read the folders it was granted. The
+# clip's own directory is the one place the user has already opened up, so a
+# copy there is readable wherever the original is.
+DISCORD_SUBDIR = ".discord"
 # Scratch space for editor export jobs (drawtext sidecar files).
 EXPORT_WORK_DIR = actual_home_dir() / ".cache" / "vice" / "exports"
 HIGHLIGHTS_DIR = actual_home_dir() / ".local" / "share" / "vice" / "highlights"
@@ -271,11 +278,12 @@ def _thumb_path(path: Path) -> Path:
     return THUMB_DIR / f"{key}.jpg"
 
 
-def _purge_slug_thumbs(slug: str) -> None:
+def _purge_slug_thumbs(slug: str, keep: frozenset[Path] = frozenset()) -> None:
     """Remove any cached thumbs for a slug (legacy + versioned variants)."""
     THUMB_DIR.mkdir(parents=True, exist_ok=True)
     for t in THUMB_DIR.glob(f"{glob.escape(slug)}*.jpg"):
-        t.unlink(missing_ok=True)
+        if t not in keep:
+            t.unlink(missing_ok=True)
 
 
 def _proxy_path(path: Path) -> Path:
@@ -290,12 +298,20 @@ def _proxy_path(path: Path) -> Path:
     return PROXY_DIR / f"{key}_v2.mp4"
 
 
-def _purge_slug_proxies(slug: str) -> None:
+def _purge_slug_proxies(slug: str, keep: frozenset[Path] = frozenset()) -> None:
     """Remove any cached preview proxies for a slug (all file versions)."""
     PROXY_DIR.mkdir(parents=True, exist_ok=True)
     for pattern in (f"{glob.escape(slug)}*.mp4", f"{glob.escape(slug)}*_audio_*.m4a"):
         for p in PROXY_DIR.glob(pattern):
-            p.unlink(missing_ok=True)
+            if p not in keep:
+                p.unlink(missing_ok=True)
+
+
+def _current_cache_files(path: Path) -> list[Path]:
+    """The thumbnail and previews already made for this exact file version."""
+    proxy = _proxy_path(path)
+    found = [_thumb_path(path), proxy, *PROXY_DIR.glob(f"{glob.escape(proxy.stem)}_audio_*.m4a")]
+    return [p for p in found if p.exists()]
 
 
 def _audio_preview_path(path: Path, index: int) -> Path:
@@ -345,6 +361,28 @@ async def _make_audio_preview(path: Path, index: int) -> Path:
                 pass
             await proc.communicate()
         tmp.unlink(missing_ok=True)
+
+
+def _discord_path(path: Path) -> Path:
+    """Where a clip's Discord-sized copy goes, keyed by file identity for the
+    same reason as _proxy_path."""
+    try:
+        st = path.stat()
+        key = f"{path.stem}_{st.st_size}_{st.st_mtime_ns}"
+    except OSError:
+        key = path.stem
+    return path.parent / DISCORD_SUBDIR / f"{key}.mp4"
+
+
+def _purge_clip_discord(path: Optional[Path]) -> None:
+    """Remove any Discord copies of *path* (all file versions)."""
+    if path is None:
+        return
+    folder = path.parent / DISCORD_SUBDIR
+    if not folder.is_dir():
+        return
+    for p in folder.glob(f"{glob.escape(path.stem)}*.mp4"):
+        p.unlink(missing_ok=True)
 
 
 # WebEngine plays these without help; anything else gets an H.264 preview proxy.
@@ -595,6 +633,88 @@ async def _make_preview_proxy(path: Path, vcodec: str) -> Optional[Path]:
         log.warning("preview proxy for %s errored: %s", path.name, exc)
         return None
     finally:
+        tmp.unlink(missing_ok=True)
+
+
+_DISCORD_TIMEOUT = 600
+
+
+async def _make_discord_copy(path: Path, duration: float,
+                            audio_streams: int = 1) -> Optional[Path]:
+    """Return a copy of *path* small enough to drop into a Discord chat.
+
+    The source itself when it already fits, a cached H.264 transcode when it
+    does not, and None when the transcode fails. Raises DiscordTooLarge when
+    no bitrate fits the clip under the cap. Same bitrate budget as the
+    editor's "optimize for Discord" export, so the two produce comparable
+    files.
+    """
+    try:
+        already_small = (path.suffix.lower() == ".mp4"
+                         and path.stat().st_size <= DISCORD_MAX_BYTES)
+    except OSError:
+        return None
+    if already_small:
+        return path
+
+    out = _discord_path(path)
+    if out.exists() and 0 < out.stat().st_size <= DISCORD_MAX_BYTES:
+        return out
+
+    video_kbps, audio_kbps = discord_bitrates(duration, audio_streams)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".mp4.tmp")
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-i", str(path),
+        "-map", "0:v:0?", "-map", "0:a?",
+        # 1440p at a Discord-sized bitrate looks worse than the same bits
+        # spent on 1080p, and Discord's inline player tops out there anyway.
+        # The pad rounds both sides up: yuv420p has no odd dimension, and
+        # libx264 refuses the frame rather than fixing it (a 127x73 source
+        # scaled to 128x73 failed outright).
+        "-vf", "scale=-2:min(1080\\,ih),pad=ceil(iw/2)*2:ceil(ih/2)*2",
+        "-c:v", "libx264", "-preset", "veryfast",
+        "-b:v", f"{video_kbps}k",
+        "-maxrate", f"{round(video_kbps * 1.45)}k",
+        "-bufsize", f"{video_kbps * 2}k",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", f"{audio_kbps}k",
+        "-movflags", "+faststart",
+        "-f", "mp4",
+        "-y", str(tmp),
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await communicate_with_timeout(proc, timeout=_DISCORD_TIMEOUT)
+        if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+            log.warning("Discord copy of %s failed: %s", path.name,
+                        (stderr or b"").decode(errors="replace")[:200])
+            return None
+        # Single-pass ABR aims at the budget, it does not promise it. Never
+        # hand out or cache a copy Discord would reject.
+        size = tmp.stat().st_size
+        if size > DISCORD_MAX_BYTES:
+            log.warning("Discord copy of %s came out at %.1f MB, over the cap",
+                        path.name, size / 1048576)
+            return None
+        tmp.replace(out)
+        return out
+    except asyncio.TimeoutError:
+        log.warning("Discord copy of %s timed out after %ss", path.name,
+                    _DISCORD_TIMEOUT)
+        return None
+    except OSError as exc:
+        log.warning("Discord copy of %s errored: %s", path.name, exc)
+        return None
+    finally:
+        # communicate_with_timeout has already killed and reaped the encoder,
+        # so nothing is still writing to this file.
         tmp.unlink(missing_ok=True)
 
 
@@ -851,8 +971,9 @@ class ShareServer:
         self.editor_project = EditorProjectStore()
         self._exports = ExportManager(self.broadcast)
 
-        # One encoder across the library. Different clips used to spawn
-        # independent encoders, each allocating its own frame queues (#193).
+        # One encoder across the library, shared by preview proxies and
+        # Discord copies. Different clips used to spawn independent encoders,
+        # each allocating its own frame queues (#193).
         self._proxy_lock = asyncio.Lock()
         self._proxy_tasks: set[asyncio.Task] = set()
         self._proxy_stopping = False
@@ -911,6 +1032,7 @@ class ShareServer:
         r.add_post("/api/clips/{slug}/reveal",            self._api_reveal)
         r.add_post("/api/clips/{slug}/open",              self._api_open)
         r.add_post("/api/clips/{slug}/copy-file",         self._api_copy_file)
+        r.add_get("/api/clips/{slug}/discord",            self._api_discord_copy)
         r.add_post("/api/clips/{slug}/frame",             self._api_save_frame)
         r.add_get("/api/clips/{slug}/audio/{index}",      self._audio_track)
         r.add_get("/api/app-state",                       self._api_get_app_state)
@@ -1484,6 +1606,31 @@ class ShareServer:
             },
         )
 
+    async def _prepare_discord_copy(self, slug: str, path: Path) -> Optional[Path]:
+        """The clip's Discord-sized file, transcoding it once if needed.
+
+        Raises DiscordTooLarge when the clip cannot fit the cap at all.
+        """
+        if self._proxy_stopping:
+            raise web.HTTPServiceUnavailable()
+        task = asyncio.current_task()
+        self._proxy_tasks.add(task)
+        try:
+            # A drag that is already encoded must not queue behind someone
+            # else's encode: the whole library shares one encoder lock.
+            cached = _discord_path(path)
+            if cached.exists() and 0 < cached.stat().st_size <= DISCORD_MAX_BYTES:
+                return cached
+            async with self._proxy_lock:
+                meta = await self._get_meta(slug, path)
+                return await _make_discord_copy(
+                    path,
+                    meta.get("duration", 0),
+                    meta.get("audio_streams", 1),
+                )
+        finally:
+            self._proxy_tasks.discard(task)
+
     async def _audio_track(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
         path = self._clips.get(slug)
@@ -1565,6 +1712,7 @@ class ShareServer:
     async def _api_delete(self, req: web.Request) -> web.Response:
         slug = req.match_info["slug"]
         path = self._clips.pop(slug, None)
+        _purge_clip_discord(path)
         if path and path.exists():
             path.unlink()
         _purge_slug_thumbs(slug)
@@ -1668,6 +1816,7 @@ class ShareServer:
         # Clear cached thumbnail and metadata so they regenerate on next access
         _purge_slug_thumbs(slug)
         _purge_slug_proxies(slug)
+        _purge_clip_discord(path)
         self._meta.pop(slug, None)
         asyncio.create_task(self._broadcast_clip(slug, path))
         return web.json_response({"ok": True, "slug": slug})
@@ -1695,14 +1844,25 @@ class ShareServer:
         if new_path.exists() and new_path != path:
             return web.json_response({"ok": False, "error": "A clip with that name already exists"})
 
+        # A rename keeps the file's size and modification time, so the cached
+        # thumbnail and previews are still valid. Purging them made an H.265
+        # clip transcode its preview again after every rename (#226).
+        cached = frozenset(_current_cache_files(path))
+        old_stem = path.stem
         path.rename(new_path)
         new_slug = new_path.stem
 
         # Update internal state
         self._clips.pop(slug, None)
         self._clips[new_slug] = new_path
-        _purge_slug_thumbs(slug)
-        _purge_slug_proxies(slug)
+        _purge_slug_thumbs(slug, keep=cached)
+        _purge_slug_proxies(slug, keep=cached)
+        _purge_clip_discord(path)
+        for old in cached:
+            try:
+                old.replace(old.with_name(new_slug + old.name[len(old_stem):]))
+            except OSError as exc:
+                log.debug("Could not carry %s across the rename: %s", old.name, exc)
         self._meta.pop(slug, None)
 
         # Rename highlights file if it exists
@@ -1757,11 +1917,26 @@ class ShareServer:
 
     async def _api_copy_file(self, req: web.Request) -> web.Response:
         """Put the clip file itself on the clipboard so it can be pasted
-        straight into Discord instead of shared as a link (#117)."""
+        straight into Discord instead of shared as a link (#117).
+
+        With ``?discord=1`` the file is the Discord-sized copy, built first if
+        it does not exist yet. That is what the Share button copies when the
+        user chose Discord files over links.
+        """
         slug = req.match_info["slug"]
         path = self._clips.get(slug)
         if not path or not path.exists():
             raise web.HTTPNotFound()
+
+        if req.query.get("discord") == "1":
+            try:
+                copy_path = await self._prepare_discord_copy(slug, path)
+            except DiscordTooLarge as exc:
+                return web.json_response({"ok": False, "error": str(exc)})
+            if copy_path is None or not copy_path.exists():
+                return web.json_response(
+                    {"ok": False, "error": "Could not build a Discord-sized copy"})
+            path = copy_path
 
         uri = path.resolve().as_uri()
         # Chromium and Electron read pasted files from text/uri-list. Both
@@ -1816,6 +1991,36 @@ class ShareServer:
         if not t.exists():
             raise web.HTTPNotFound()
         return web.FileResponse(t, headers={"Content-Type": "image/jpeg"})
+
+    async def _api_discord_copy(self, req: web.Request) -> web.Response:
+        """Build (or reuse) the clip's Discord-sized copy and say where it is.
+
+        The share modal calls this when it opens so the file is on disk before
+        anyone tries to drag it: a drag cannot wait for an encode.
+        """
+        slug = req.match_info["slug"]
+        path = self._clips.get(slug)
+        if not path or not path.exists():
+            raise web.HTTPNotFound()
+        try:
+            copy_path = await self._prepare_discord_copy(slug, path)
+        except DiscordTooLarge as exc:
+            return web.json_response({"ok": False, "error": str(exc)})
+        if copy_path is None or not copy_path.exists():
+            return web.json_response(
+                {"ok": False, "error": "Could not build a Discord-sized copy"})
+        st = copy_path.stat()
+        return web.json_response({
+            "ok": True,
+            # A path, not a URL: a drop target outside the window takes files
+            # as a file:// uri-list. There is deliberately no HTTP route for
+            # the copy, so nothing can fall back to the full-size original
+            # while claiming to serve a Discord-sized one.
+            "path": str(copy_path),
+            "filename": f"{slug}.mp4",
+            "size": st.st_size,
+            "limit": DISCORD_MAX_BYTES,
+        })
 
     async def _api_images(self, _: web.Request) -> web.Response:
         items = [
@@ -2229,9 +2434,15 @@ class ShareServer:
             path.write_text(text)
 
         tmp = dest / f".{final.stem}.export.mp4"
-        cmd = build_export_cmd(project, sources, tmp,
-                               accent=str(body.get("accent", "")) or "#0099ff",
-                               text_dir=work)
+        discord_optimized = bool(body.get("discord_optimized"))
+        try:
+            cmd = build_export_cmd(project, sources, tmp,
+                                   accent=str(body.get("accent", "")) or "#0099ff",
+                                   text_dir=work,
+                                   discord_optimized=discord_optimized)
+        except DiscordTooLarge as exc:
+            shutil.rmtree(work, ignore_errors=True)
+            return web.json_response({"ok": False, "error": str(exc)}, status=400)
         add_to_library = bool(body.get("add_to_library"))
 
         async def on_done(path: Path) -> Optional[dict]:
@@ -2254,7 +2465,8 @@ class ShareServer:
 
         try:
             self._exports.start(job_id, cmd, project_extent(project), tmp, final,
-                                on_done=on_done, cleanup=cleanup)
+                                on_done=on_done, cleanup=cleanup,
+                                max_bytes=DISCORD_MAX_BYTES if discord_optimized else None)
         except ExportBusy:
             cleanup()
             return web.json_response(
@@ -2419,11 +2631,13 @@ class ShareServer:
             getattr(old_cfg.output, "image_directory", "")
             != getattr(new_cfg.output, "image_directory", "")
         )
-        # embed_color is read per-request, so changing it (the UI syncs it
-        # on theme switches) must not demand a daemon restart.
+        # embed_color is read per-request (the UI syncs it on theme switches)
+        # and share_discord_file only by the UI, so neither demands a daemon
+        # restart.
         old_sharing = copy.deepcopy(old_cfg.sharing)
         new_sharing = copy.deepcopy(new_cfg.sharing)
         old_sharing.embed_color = new_sharing.embed_color = ""
+        old_sharing.share_discord_file = new_sharing.share_discord_file = False
         restart_required = (
             old_sharing != new_sharing
             or old_cfg.recording.gsr_args != new_cfg.recording.gsr_args

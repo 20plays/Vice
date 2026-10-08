@@ -92,6 +92,10 @@ class RecordingConfig:
     # `display`. The capture backend cannot switch targets mid-run, so moving
     # to another monitor restarts the recorder and its replay buffer.
     follow_mouse_display: bool = False
+    # Capture just the focused game window instead of the whole display.
+    # Requires the gpu-screen-recorder backend; falls back to full-display
+    # capture if the focused window's size can't be detected.
+    window_capture: bool = False
     # None = auto-detect from display. E.g. "1920x1080".
     resolution: Optional[str] = None
     # "auto" | "h264_nvenc" | "hevc_nvenc" | "av1_nvenc" | "h264_vaapi" | "hevc_vaapi" | "av1_vaapi" | "libx264" | "libx265" | "copy"
@@ -211,6 +215,10 @@ class SharingConfig:
     # Accent color for share-page embeds (Discord sidebar strip etc.).
     # Synced from the UI theme; must be a #rrggbb hex value.
     embed_color: str = "#0099ff"
+    # What the Share button does: False copies the share link, True copies a
+    # Discord-sized copy of the clip file. Right-click opens the share sheet
+    # either way. Off unless chosen during setup or in Settings.
+    share_discord_file: bool = False
 
 
 @dataclass
@@ -232,6 +240,9 @@ class DiscordConfig:
     # Keep the activity card up while the matched game's process is running,
     # not only while its window is focused.
     persist_while_running: bool = True
+    # Show the game's own Discord icon as the large image, with Vice's logo as
+    # a small badge. Off, or any failed lookup, sends the plain Vice logo.
+    game_icons: bool = True
     # User-managed game additions on top of the bundled games.json database.
     custom_games: list[DiscordCustomGame] = field(default_factory=list)
 

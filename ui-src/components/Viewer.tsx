@@ -36,6 +36,8 @@ export interface ViewerProps {
   /** True while the trim modal is open over the viewer or the player bar. */
   trimOpen: boolean;
   onShare: (clip: Clip) => void;
+  onShareMenu: (clip: Clip) => void;
+  shareLabel: string;
   onReveal: (clip: Clip) => void;
   onDelete: (clip: Clip) => void;
   onOpenExternally: (clip: Clip) => void;
@@ -757,7 +759,15 @@ export function Viewer(props: ViewerProps) {
                 <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onTrim(clip)}>
                   {t('viewer.trim')}
                 </button>
-                <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onShare(clip)}>
+                <button
+                  type="button"
+                  className="btn btn-quiet btn-sm"
+                  title={props.shareLabel}
+                  onClick={() => props.onShare(clip)}
+                  onContextMenu={e => {
+                    e.preventDefault();
+                    props.onShareMenu(clip);
+                  }}>
                   {t('viewer.share')}
                 </button>
                 <button type="button" className="btn btn-quiet btn-sm" onClick={() => props.onReveal(clip)}>
@@ -788,6 +798,8 @@ export function Viewer(props: ViewerProps) {
           onVolume={applyVolume}
           onToggleMute={toggleMuted}
           onShare={() => props.onShare(clip)}
+          onShareMenu={() => props.onShareMenu(clip)}
+          shareLabel={props.shareLabel}
           onClose={onClose}
         />
       </div>
@@ -829,6 +841,8 @@ function PlayerBar({
   onVolume,
   onToggleMute,
   onShare,
+  onShareMenu,
+  shareLabel,
   onClose,
 }: {
   clip: Clip;
@@ -844,6 +858,8 @@ function PlayerBar({
   onVolume: (next: number) => void;
   onToggleMute: () => void;
   onShare: () => void;
+  onShareMenu: () => void;
+  shareLabel: string;
   onClose: () => void;
 }) {
   return (
@@ -891,7 +907,16 @@ function PlayerBar({
       </div>
 
       <div className="player-extra">
-        <button type="button" className="player-btn" onClick={onShare} aria-label={t('viewer.copyShareLink')}>
+        <button
+          type="button"
+          className="player-btn"
+          onClick={onShare}
+          onContextMenu={e => {
+            e.preventDefault();
+            onShareMenu();
+          }}
+          title={shareLabel}
+          aria-label={shareLabel}>
           <ShareGlyph />
         </button>
         <button type="button" className="player-btn" onClick={onClose} aria-label={t('viewer.closePlayer')}>

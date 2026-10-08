@@ -342,6 +342,9 @@ export function Settings() {
 
   const buffer = bufferNote(draft);
   const followSupported = displays.follow_mouse_supported !== false;
+  // Window pinning is GSR-only; status.backend is what's actually running,
+  // not just configured (backend can be "auto").
+  const windowCaptureSupported = draft.backend === 'gsr' || status.backend === 'gpu-screen-recorder';
 
   return (
     <div className="settings">
@@ -532,8 +535,24 @@ export function Settings() {
             <Toggle
               label={t('settings.followMouse')}
               checked={followSupported && draft.followMouse}
-              disabled={!followSupported}
+              disabled={!followSupported || draft.windowCapture}
               onChange={followMouse => update({followMouse})}
+            />
+          </Row>
+
+          <Row
+            label={t('settings.windowCapture')}
+            note={
+              windowCaptureSupported
+                ? null
+                : {text: t('settings.windowCaptureUnsupported'), tone: 'warning' as const}
+            }
+            help={t('settings.windowCaptureHelp')}>
+            <Toggle
+              label={t('settings.windowCapture')}
+              checked={windowCaptureSupported && draft.windowCapture}
+              disabled={!windowCaptureSupported}
+              onChange={windowCapture => update({windowCapture, followMouse: windowCapture ? false : draft.followMouse})}
             />
           </Row>
 
@@ -541,7 +560,7 @@ export function Settings() {
             <Select
               label={t('settings.display')}
               value={draft.display}
-              disabled={draft.followMouse && followSupported}
+              disabled={(draft.followMouse && followSupported) || draft.windowCapture}
               onChange={display => update({display})}
               options={displayOptions(draft, displays)}
             />
@@ -891,6 +910,16 @@ export function Settings() {
               onChange={cloudflareTunnel => update({cloudflareTunnel})}
             />
           </Row>
+
+          <Row
+            label={t('settings.shareDiscordFile')}
+            help={t('settings.shareDiscordFileHelp')}>
+            <Toggle
+              label={t('settings.shareDiscordFile')}
+              checked={draft.shareDiscordFile}
+              onChange={shareDiscordFile => update({shareDiscordFile})}
+            />
+          </Row>
         </Card>
 
         {/* ── Discord ───────────────────────────────────────────── */}
@@ -902,6 +931,16 @@ export function Settings() {
               label={t('settings.discordEnabled')}
               checked={draft.discordEnabled}
               onChange={discordEnabled => update({discordEnabled})}
+            />
+          </Row>
+
+          <Row
+            label={t('settings.discordGameIcons')}
+            help={t('settings.discordGameIconsHelp')}>
+            <Toggle
+              label={t('settings.discordGameIcons')}
+              checked={draft.discordGameIcons}
+              onChange={discordGameIcons => update({discordGameIcons})}
             />
           </Row>
 
